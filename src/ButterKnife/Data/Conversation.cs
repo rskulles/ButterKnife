@@ -9,6 +9,7 @@ public sealed record Conversation(
     string Title,
     string Backend,
     string Model,
+    Guid? PersonaId,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     IReadOnlyList<ChatMessage> Messages);

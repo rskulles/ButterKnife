@@ -6,6 +6,9 @@ public sealed class LlmOptions
     public const string SectionName = "Llm";
 
     public List<LlmBackendOptions> Backends { get; set; } = [];
+
+    /// <summary>Name of the persona preselected for new conversations. Empty or unknown means no persona.</summary>
+    public string DefaultPersona { get; set; } = "";
 }
 
 public enum BackendKind

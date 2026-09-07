@@ -2,15 +2,19 @@
 @page "/chat/{Id:guid}"
 @using System.Diagnostics
 @using System.Text
+@using ButterKnife.Options
 @using ButterKnife.Services
+@using Microsoft.Extensions.Options
 @implements IAsyncDisposable
 @inject ILlmClientRegistry Registry
 @inject ModelCatalog Catalog
 @inject IJSRuntime JS
 @inject MarkdownRenderer Markdown
 @inject IConversationStore Store
+@inject IPersonaStore Personas
 @inject ConversationEvents Events
 @inject NavigationManager Nav
+@inject IOptions<LlmOptions> LlmOptions
 
 <PageTitle>@(_title is null ? "ButterKnife" : $"{_title} · ButterKnife")</PageTitle>
 
@@ -35,7 +39,30 @@
         <button class="btn btn-sm btn-outline-secondary" @onclick="NewChat" disabled="@_isStreaming">
             New chat
         </button>
+        <label class="visually-hidden" for="persona-select">Persona</label>
+        <select id="persona-select" class="form-select form-select-sm persona-select ms-auto"
+                value="@_personaKey" @onchange="OnPersonaChangedAsync" disabled="@_isStreaming"
+                title="@(SelectedPersona?.Description ?? "No system prompt is sent")">
+            <option value="">No persona</option>
+            @foreach (var p in _personas)
+            {
+                <option value="@p.Id">@p.Name@(p.IsBuiltIn ? "" : " (custom)")</option>
+            }
+        </select>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _showPersonaPrompt = !_showPersonaPrompt"
+                disabled="@(SelectedPersona is null)" aria-expanded="@_showPersonaPrompt" aria-controls="persona-prompt"
+                title="Show this persona's system prompt">
+            @(_showPersonaPrompt ? "Hide prompt" : "Show prompt")
+        </button>
     </header>
+
+    @if (_showPersonaPrompt && SelectedPersona is { } persona)
+    {
+        <div id="persona-prompt" class="persona-prompt">
+            <div class="small text-muted mb-1">@persona.Name — @persona.Description</div>
+            <div class="persona-prompt-text">@persona.SystemPrompt</div>
+        </div>
+    }
 
     @foreach (var (backend, message) in _backendErrors)
     {
@@ -97,6 +124,9 @@
     private List<ModelDescriptor> _models = [];
     private IReadOnlyDictionary<string, string> _backendErrors = new Dictionary<string, string>();
     private string _selectedKey = "";
+    private List<Persona> _personas = [];
+    private string _personaKey = "";
+    private bool _showPersonaPrompt;
     private string _input = "";
     private string? _error;
     private bool _isStreaming;
@@ -114,7 +144,43 @@
 
     private ModelDescriptor? Selected => _models.FirstOrDefault(m => m.Key == _selectedKey);
 
-    protected override Task OnInitializedAsync() => RefreshModelsAsync();
+    private Persona? SelectedPersona => _personas.FirstOrDefault(p => p.Id.ToString() == _personaKey);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Task.WhenAll(RefreshModelsAsync(), LoadPersonasAsync());
+
+        // First visit to "/": OnParametersSetAsync returns early (null id == null current id), so apply the default here.
+        if (Id is null)
+        {
+            _personaKey = DefaultPersonaKey();
+        }
+    }
+
+    private async Task LoadPersonasAsync()
+    {
+        try
+        {
+            _personas = (await Personas.ListAsync(_disposed.Token)).ToList();
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not load personas: {ex.Message}";
+        }
+    }
+
+    private string DefaultPersonaKey()
+    {
+        var name = LlmOptions.Value.DefaultPersona;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return "";
+        }
+        return _personas.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))?.Id.ToString() ?? "";
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -128,6 +194,7 @@
         _error = null;
         _conversationId = Id;
         _title = null;
+        _personaKey = DefaultPersonaKey();
 
         if (Id is not { } id)
         {
@@ -143,6 +210,7 @@
         }
 
         _title = conversation.Title;
+        _personaKey = conversation.PersonaId?.ToString() ?? "";
         foreach (var message in conversation.Messages)
         {
             _turns.Add(new Turn(message.Role, message.Content, Markdown));
@@ -250,7 +318,12 @@
         }
 
         _turns.Add(new Turn(ChatRole.User, prompt, Markdown));
-        var history = _turns.Select(t => new ChatMessage(t.Role, t.Text)).ToList();
+        var history = new List<ChatMessage>();
+        if (SelectedPersona is { } activePersona)
+        {
+            history.Add(new ChatMessage(ChatRole.System, activePersona.SystemPrompt));
+        }
+        history.AddRange(_turns.Select(t => new ChatMessage(t.Role, t.Text)));
 
         var reply = new Turn(ChatRole.Assistant, "", Markdown) { IsStreaming = true };
         _turns.Add(reply);
@@ -324,12 +397,39 @@
         }
 
         var title = MakeTitle(firstPrompt);
-        var conversation = await Store.CreateAsync(title, model.Backend, model.Model, _disposed.Token);
+        var conversation = await Store.CreateAsync(title, model.Backend, model.Model, SelectedPersona?.Id, _disposed.Token);
         _conversationId = conversation.Id;
         _title = title;
         Events.NotifyChanged();
         Nav.NavigateTo($"/chat/{conversation.Id}", replace: true); // same component instance; OnParametersSetAsync sees the id already loaded
         return conversation.Id;
+    }
+
+    /// <summary>Persists the persona for an existing conversation; a new conversation carries it when it is created.</summary>
+    private async Task OnPersonaChangedAsync(ChangeEventArgs e)
+    {
+        _personaKey = e.Value?.ToString() ?? "";
+        if (SelectedPersona is null)
+        {
+            _showPersonaPrompt = false;
+        }
+
+        if (_conversationId is not { } id)
+        {
+            return;
+        }
+
+        try
+        {
+            await Store.SetPersonaAsync(id, SelectedPersona?.Id, _disposed.Token);
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = $"Persona was not saved: {ex.Message}";
+        }
     }
 
     private async Task PersistReplyAsync(Guid conversationId, string? text)

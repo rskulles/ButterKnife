@@ -8,7 +8,7 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 builder.Services.AddLlmBackends(builder.Configuration);
-builder.Services.AddConversationStore(builder.Configuration);
+builder.Services.AddDataStores(builder.Configuration);
 
 var app = builder.Build();
 
