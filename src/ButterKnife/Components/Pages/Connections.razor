@@ -1,0 +1,392 @@
+@page "/connections"
+@using System.ComponentModel.DataAnnotations
+@using ButterKnife.Options
+@using ButterKnife.Services
+@implements IDisposable
+@inject IConnectionStore Store
+@inject ConnectionEvents Events
+@inject IHttpClientFactory HttpClientFactory
+
+<PageTitle>Connections · ButterKnife</PageTitle>
+
+<h1 class="h4">Connections</h1>
+<p class="text-muted">LLM servers this app can talk to. Pick a preset for a stock endpoint, point it at the right host, and save.</p>
+
+<div class="row g-4">
+    <div class="col-lg-7">
+        @if (_connections.Count == 0)
+        {
+            <p class="text-muted">No connections yet. Add one on the right.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead>
+                        <tr><th>Name</th><th>Kind</th><th>Base URL</th><th>Default model</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var c in _connections)
+                        {
+                            <tr class="@(c.Id == _editingId ? "table-active" : "")">
+                                <td>
+                                    @c.Name
+                                    @if (c.HasApiKey)
+                                    {
+                                        <span class="badge text-bg-secondary ms-1" title="An API key is stored for this connection">key</span>
+                                    }
+                                </td>
+                                <td>@KindLabel(c.Kind)</td>
+                                <td class="text-break"><code>@c.BaseUrl</code></td>
+                                <td>@(c.DefaultModel ?? "—")</td>
+                                <td class="text-nowrap text-end">
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => TestSavedAsync(c)" disabled="@_busy">Test</button>
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(c)" disabled="@_busy">Edit</button>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(c)" disabled="@_busy">Delete</button>
+                                </td>
+                            </tr>
+                            @if (_testResults.TryGetValue(c.Id, out var result))
+                            {
+                                <tr>
+                                    <td colspan="5" class="small @(result.Ok ? "text-success" : "text-danger")">@result.Message</td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card">
+            <div class="card-body">
+                <h2 class="h6">@(_editingId is null ? "Add connection" : "Edit connection")</h2>
+
+                <div class="mb-1 small text-muted">Presets</div>
+                <div class="mb-2 d-flex flex-wrap gap-1">
+                    @foreach (var preset in ConnectionPresets.All)
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => ApplyPreset(preset)" disabled="@_busy">@preset.Name</button>
+                    }
+                </div>
+                @if (_presetHint is not null)
+                {
+                    <p class="small text-muted">@_presetHint</p>
+                }
+
+                <EditForm Model="_form" OnValidSubmit="SaveAsync" FormName="connection">
+                    <DataAnnotationsValidator />
+
+                    <div class="mb-2">
+                        <label class="form-label small mb-0" for="c-name">Name</label>
+                        <InputText id="c-name" class="form-control form-control-sm" @bind-Value="_form.Name" />
+                        <ValidationMessage For="() => _form.Name" class="small text-danger" />
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small mb-0" for="c-kind">Kind</label>
+                        <InputSelect id="c-kind" class="form-select form-select-sm" @bind-Value="_form.Kind">
+                            @foreach (var kind in Enum.GetValues<BackendKind>())
+                            {
+                                <option value="@kind">@KindLabel(kind)</option>
+                            }
+                        </InputSelect>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small mb-0" for="c-url">Base URL</label>
+                        <InputText id="c-url" class="form-control form-control-sm" @bind-Value="_form.BaseUrl" placeholder="http://host:port" />
+                        <ValidationMessage For="() => _form.BaseUrl" class="small text-danger" />
+                        <div class="form-text">@UrlHint(_form.Kind)</div>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small mb-0" for="c-key">API key <span class="text-muted">(optional for local servers)</span></label>
+                        <InputText id="c-key" type="password" class="form-control form-control-sm" @bind-Value="_form.ApiKey" autocomplete="off"
+                                   placeholder="@(_editingHasKey ? "Leave blank to keep the stored key" : "")" />
+                        @if (_editingHasKey)
+                        {
+                            <div class="form-check mt-1">
+                                <InputCheckbox id="c-clear-key" class="form-check-input" @bind-Value="_form.ClearApiKey" />
+                                <label class="form-check-label small" for="c-clear-key">Remove the stored API key</label>
+                            </div>
+                        }
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label small mb-0" for="c-model">Default model <span class="text-muted">(optional)</span></label>
+                        <InputText id="c-model" class="form-control form-control-sm" @bind-Value="_form.DefaultModel" list="c-model-options" />
+                        <datalist id="c-model-options">
+                            @foreach (var m in _fetchedModels)
+                            {
+                                <option value="@m"></option>
+                            }
+                        </datalist>
+                        <div class="form-text">Preselected in the chat model picker. Press Test to fetch the model list.</div>
+                    </div>
+
+                    <div class="d-flex gap-2">
+                        <button type="submit" class="btn btn-sm btn-primary" disabled="@_busy">@(_editingId is null ? "Add" : "Save")</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="TestFormAsync" disabled="@_busy">Test</button>
+                        @if (_editingId is not null)
+                        {
+                            <button type="button" class="btn btn-sm btn-link" @onclick="CancelEdit" disabled="@_busy">Cancel</button>
+                        }
+                    </div>
+                </EditForm>
+
+                @if (_formMessage is not null)
+                {
+                    <div class="small mt-2 @(_formOk ? "text-success" : "text-danger")">@_formMessage</div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(20);
+
+    private IReadOnlyList<LlmConnection> _connections = [];
+    private readonly Dictionary<Guid, (bool Ok, string Message)> _testResults = [];
+    private List<string> _fetchedModels = [];
+
+    private ConnectionForm _form = new();
+    private Guid? _editingId;
+    private bool _editingHasKey;
+    private string? _presetHint;
+    private string? _formMessage;
+    private bool _formOk;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Events.Changed += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _connections = await Store.ListAsync();
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private void ApplyPreset(ConnectionPreset preset)
+    {
+        _form.Name = preset.Name;
+        _form.Kind = preset.Kind;
+        _form.BaseUrl = preset.BaseUrl;
+        _form.DefaultModel = preset.DefaultModel ?? "";
+        _presetHint = preset.Hint;
+        _formMessage = null;
+    }
+
+    private void BeginEdit(LlmConnection c)
+    {
+        _editingId = c.Id;
+        _editingHasKey = c.HasApiKey;
+        _form = new ConnectionForm
+        {
+            Name = c.Name,
+            Kind = c.Kind,
+            BaseUrl = c.BaseUrl,
+            ApiKey = "",
+            DefaultModel = c.DefaultModel ?? "",
+        };
+        _presetHint = null;
+        _formMessage = null;
+        _fetchedModels = [];
+    }
+
+    private void CancelEdit()
+    {
+        _editingId = null;
+        _editingHasKey = false;
+        _form = new ConnectionForm();
+        _presetHint = null;
+        _formMessage = null;
+        _fetchedModels = [];
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        _formMessage = null;
+        try
+        {
+            var apiKey = await ResolveApiKeyAsync();
+            if (_editingId is { } id)
+            {
+                await Store.UpdateAsync(id, _form.Name, _form.Kind, _form.BaseUrl, apiKey, _form.DefaultModel);
+            }
+            else
+            {
+                await Store.CreateAsync(_form.Name, _form.Kind, _form.BaseUrl, apiKey, _form.DefaultModel);
+            }
+
+            Events.NotifyChanged();
+            await LoadAsync();
+            CancelEdit();
+            _formOk = true;
+            _formMessage = "Saved.";
+        }
+        catch (Exception ex)
+        {
+            _formOk = false;
+            _formMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Blank key on edit keeps the stored one unless the user asked to remove it.</summary>
+    private async Task<string?> ResolveApiKeyAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_form.ApiKey))
+        {
+            return _form.ApiKey;
+        }
+        if (_editingId is { } id && !_form.ClearApiKey)
+        {
+            return (await Store.GetAsync(id))?.ApiKey;
+        }
+        return null;
+    }
+
+    private async Task DeleteAsync(LlmConnection c)
+    {
+        _busy = true;
+        try
+        {
+            await Store.DeleteAsync(c.Id);
+            _testResults.Remove(c.Id);
+            if (_editingId == c.Id)
+            {
+                CancelEdit();
+            }
+            Events.NotifyChanged();
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task TestSavedAsync(LlmConnection c)
+    {
+        _busy = true;
+        try
+        {
+            _testResults[c.Id] = await ProbeAsync(c);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Tests the form as typed, before saving; also fills the default-model suggestions.</summary>
+    private async Task TestFormAsync()
+    {
+        if (!Uri.TryCreate(_form.BaseUrl, UriKind.Absolute, out _))
+        {
+            _formOk = false;
+            _formMessage = "Enter an absolute base URL first.";
+            return;
+        }
+
+        _busy = true;
+        _formMessage = null;
+        try
+        {
+            var apiKey = await ResolveApiKeyAsync();
+            var candidate = new LlmConnection(
+                _editingId ?? Guid.NewGuid(),
+                string.IsNullOrWhiteSpace(_form.Name) ? "Untitled" : _form.Name,
+                _form.Kind,
+                _form.BaseUrl,
+                apiKey,
+                null,
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow);
+
+            var (ok, message) = await ProbeAsync(candidate);
+            _formOk = ok;
+            _formMessage = message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task<(bool Ok, string Message)> ProbeAsync(LlmConnection c)
+    {
+        using var cts = new CancellationTokenSource(TestTimeout);
+        try
+        {
+            var client = LlmClientFactory.Create(c, HttpClientFactory);
+            var models = await client.ListModelsAsync(cts.Token);
+            _fetchedModels = models.ToList();
+
+            if (models.Count == 0)
+            {
+                return (true, "Reachable, but it reports no models.");
+            }
+
+            var preview = string.Join(", ", models.Take(5));
+            var more = models.Count > 5 ? $" and {models.Count - 5} more" : "";
+            return (true, $"OK — {models.Count} model{(models.Count == 1 ? "" : "s")}: {preview}{more}.");
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            return (false, $"No response within {TestTimeout.TotalSeconds:0}s. Check the host, port and that the server is running.");
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    private static string KindLabel(BackendKind kind) => kind switch
+    {
+        BackendKind.Ollama => "Ollama",
+        BackendKind.OpenAiCompatible => "OpenAI-compatible",
+        BackendKind.Anthropic => "Anthropic",
+        _ => kind.ToString(),
+    };
+
+    private static string UrlHint(BackendKind kind) => kind switch
+    {
+        BackendKind.Ollama => "Server root, e.g. http://ollama.local:11434 (no /api suffix).",
+        BackendKind.OpenAiCompatible => "Include the version prefix, e.g. http://lmstudio.local:1234/v1.",
+        BackendKind.Anthropic => "Normally https://api.anthropic.com. Change only for a proxy.",
+        _ => "",
+    };
+
+    public void Dispose() => Events.Changed -= OnChanged;
+
+    private sealed class ConnectionForm
+    {
+        [Required(ErrorMessage = "Name is required.")]
+        public string Name { get; set; } = "";
+
+        public BackendKind Kind { get; set; } = BackendKind.Ollama;
+
+        [Required(ErrorMessage = "Base URL is required.")]
+        [Url(ErrorMessage = "Enter an absolute http(s) URL.")]
+        public string BaseUrl { get; set; } = "";
+
+        public string ApiKey { get; set; } = "";
+
+        public bool ClearApiKey { get; set; }
+
+        public string DefaultModel { get; set; } = "";
+    }
+}

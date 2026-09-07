@@ -1,9 +1,10 @@
 namespace ButterKnife.Services;
 
-/// <summary>Resolves the configured backends by name.</summary>
+/// <summary>Resolves clients for the connections currently in the store.</summary>
 public interface ILlmClientRegistry
 {
-    IReadOnlyList<ILlmClient> Clients { get; }
+    Task<IReadOnlyList<ILlmClient>> GetClientsAsync(CancellationToken cancellationToken = default);
 
-    ILlmClient Get(string backendName);
+    /// <summary>Throws <see cref="KeyNotFoundException"/> if the connection no longer exists.</summary>
+    Task<ILlmClient> GetAsync(Guid connectionId, CancellationToken cancellationToken = default);
 }

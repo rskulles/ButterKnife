@@ -7,7 +7,7 @@ public sealed record ConversationSummary(Guid Id, string Title, DateTimeOffset U
 public sealed record Conversation(
     Guid Id,
     string Title,
-    string Backend,
+    Guid ConnectionId,
     string Model,
     Guid? PersonaId,
     DateTimeOffset CreatedAt,

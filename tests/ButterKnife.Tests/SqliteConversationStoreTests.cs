@@ -7,6 +7,9 @@ namespace ButterKnife.Tests;
 public sealed class SqliteConversationStoreTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "butterknife-tests", Guid.NewGuid().ToString("N"));
+    private static readonly Guid ConnA = Guid.NewGuid();
+    private static readonly Guid ConnB = Guid.NewGuid();
+
     private readonly SqliteDatabase _db;
     private readonly SqliteConversationStore _store;
 
@@ -23,7 +26,7 @@ public sealed class SqliteConversationStoreTests : IDisposable
     [Fact]
     public async Task CreatesDirectoryAndRoundTripsConversation()
     {
-        var created = await _store.CreateAsync("Hello there", "Ollama", "llama3", null, CancellationToken.None);
+        var created = await _store.CreateAsync("Hello there", ConnA, "llama3", null, CancellationToken.None);
         await _store.AppendMessageAsync(created.Id, new ChatMessage(ChatRole.User, "hi"), CancellationToken.None);
         await _store.AppendMessageAsync(created.Id, new ChatMessage(ChatRole.Assistant, "hello **you**"), CancellationToken.None);
 
@@ -32,7 +35,7 @@ public sealed class SqliteConversationStoreTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(_dir, "nested")));
         Assert.NotNull(loaded);
         Assert.Equal("Hello there", loaded.Title);
-        Assert.Equal("Ollama", loaded.Backend);
+        Assert.Equal(ConnA, loaded.ConnectionId);
         Assert.Equal("llama3", loaded.Model);
         Assert.Equal(
             [new ChatMessage(ChatRole.User, "hi"), new ChatMessage(ChatRole.Assistant, "hello **you**")],
@@ -41,11 +44,39 @@ public sealed class SqliteConversationStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task RoundTripsImagesAndCascadesThem()
+    {
+        var conv = await _store.CreateAsync("img", ConnA, "m", null, CancellationToken.None);
+        var bytes = Enumerable.Range(0, 300).Select(i => (byte)i).ToArray();
+        await _store.AppendMessageAsync(conv.Id,
+            new ChatMessage(ChatRole.User, "look", [new ChatImage("image/png", bytes), new ChatImage("image/jpeg", [1, 2, 3])]),
+            CancellationToken.None);
+        await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.Assistant, "seen"), CancellationToken.None);
+
+        var loaded = await _store.GetAsync(conv.Id, CancellationToken.None);
+
+        Assert.Equal(2, loaded!.Messages.Count);
+        Assert.Equal(2, loaded.Messages[0].Images.Count);
+        Assert.Equal("image/png", loaded.Messages[0].Images[0].MediaType);
+        Assert.Equal(bytes, loaded.Messages[0].Images[0].Data);
+        Assert.Equal(new byte[] { 1, 2, 3 }, loaded.Messages[0].Images[1].Data);
+        Assert.False(loaded.Messages[1].HasImages);
+
+        await _store.DeleteAsync(conv.Id, CancellationToken.None);
+
+        await using var connection = new SqliteConnection($"Data Source={Path.Combine(_dir, "nested", "test.db")}");
+        await connection.OpenAsync(CancellationToken.None);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM message_images;";
+        Assert.Equal(0L, (long)(await cmd.ExecuteScalarAsync(CancellationToken.None))!);
+    }
+
+    [Fact]
     public async Task ListsMostRecentlyUpdatedFirst()
     {
-        var older = await _store.CreateAsync("older", "b", "m", null, CancellationToken.None);
+        var older = await _store.CreateAsync("older", ConnB, "m", null, CancellationToken.None);
         await Task.Delay(5, CancellationToken.None);
-        var newer = await _store.CreateAsync("newer", "b", "m", null, CancellationToken.None);
+        var newer = await _store.CreateAsync("newer", ConnB, "m", null, CancellationToken.None);
         await Task.Delay(5, CancellationToken.None);
         await _store.AppendMessageAsync(older.Id, new ChatMessage(ChatRole.User, "bump"), CancellationToken.None);
 
@@ -58,7 +89,7 @@ public sealed class SqliteConversationStoreTests : IDisposable
     [Fact]
     public async Task DeleteCascadesMessages()
     {
-        var conv = await _store.CreateAsync("t", "b", "m", null, CancellationToken.None);
+        var conv = await _store.CreateAsync("t", ConnB, "m", null, CancellationToken.None);
         await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.User, "x"), CancellationToken.None);
 
         await _store.DeleteAsync(conv.Id, CancellationToken.None);
@@ -76,12 +107,12 @@ public sealed class SqliteConversationStoreTests : IDisposable
     [Fact]
     public async Task SetModelUpdatesBackendAndModel()
     {
-        var conv = await _store.CreateAsync("t", "Ollama", "a", null, CancellationToken.None);
+        var conv = await _store.CreateAsync("t", ConnA, "a", null, CancellationToken.None);
 
-        await _store.SetModelAsync(conv.Id, "LM Studio", "b", CancellationToken.None);
+        await _store.SetModelAsync(conv.Id, ConnB, "b", CancellationToken.None);
 
         var loaded = await _store.GetAsync(conv.Id, CancellationToken.None);
-        Assert.Equal(("LM Studio", "b"), (loaded!.Backend, loaded.Model));
+        Assert.Equal((ConnB, "b"), (loaded!.ConnectionId, loaded.Model));
     }
 
     [Fact]
@@ -97,7 +128,7 @@ public sealed class SqliteConversationStoreTests : IDisposable
         var personas = new SqlitePersonaStore(_db);
         var programmer = (await personas.ListAsync(CancellationToken.None)).Single(p => p.Name == "Programmer");
 
-        var conv = await _store.CreateAsync("t", "b", "m", programmer.Id, CancellationToken.None);
+        var conv = await _store.CreateAsync("t", ConnB, "m", programmer.Id, CancellationToken.None);
         Assert.Equal(programmer.Id, (await _store.GetAsync(conv.Id, CancellationToken.None))!.PersonaId);
 
         await _store.SetPersonaAsync(conv.Id, null, CancellationToken.None);

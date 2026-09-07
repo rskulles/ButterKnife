@@ -80,10 +80,21 @@ public sealed class SqliteDatabase
                     updated_at    TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS connections (
+                    id            TEXT PRIMARY KEY,
+                    name          TEXT NOT NULL,
+                    kind          TEXT NOT NULL,
+                    base_url      TEXT NOT NULL,
+                    api_key       TEXT NULL,
+                    default_model TEXT NULL,
+                    created_at    TEXT NOT NULL,
+                    updated_at    TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS conversations (
                     id         TEXT PRIMARY KEY,
                     title      TEXT NOT NULL,
-                    backend    TEXT NOT NULL,
+                    backend    TEXT NOT NULL, -- connection id (GUID)
                     model      TEXT NOT NULL,
                     persona_id TEXT NULL REFERENCES personas(id) ON DELETE SET NULL,
                     created_at TEXT NOT NULL,
@@ -99,6 +110,15 @@ public sealed class SqliteDatabase
                 );
 
                 CREATE INDEX IF NOT EXISTS ix_messages_conversation ON messages(conversation_id, id);
+
+                CREATE TABLE IF NOT EXISTS message_images (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                    media_type TEXT NOT NULL,
+                    data       BLOB NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_message_images_message ON message_images(message_id);
                 """, cancellationToken);
 
             // Databases created before personas existed.

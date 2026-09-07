@@ -12,7 +12,9 @@ public static class DataServiceCollectionExtensions
         services.AddSingleton<SqliteDatabase>();
         services.AddSingleton<IConversationStore, SqliteConversationStore>();
         services.AddSingleton<IPersonaStore, SqlitePersonaStore>();
+        services.AddSingleton<IConnectionStore, SqliteConnectionStore>();
         services.AddSingleton<ConversationEvents>();
+        services.AddSingleton<ConnectionEvents>();
         return services;
     }
 }

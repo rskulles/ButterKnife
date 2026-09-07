@@ -1,10 +1,12 @@
 namespace ButterKnife.Services;
 
 /// <summary>
-/// A single LLM backend. One instance per configured backend; implementations are per wire protocol.
+/// A single LLM connection. Implementations are per wire protocol; instances are cheap and built per use from the connection store.
 /// </summary>
 public interface ILlmClient
 {
+    Guid ConnectionId { get; }
+
     string BackendName { get; }
 
     string? DefaultModel { get; }

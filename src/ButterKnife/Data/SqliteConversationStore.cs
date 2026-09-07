@@ -5,7 +5,7 @@ namespace ButterKnife.Data;
 
 public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationStore
 {
-    public async Task<Conversation> CreateAsync(string title, string backend, string model, Guid? personaId, CancellationToken cancellationToken = default)
+    public async Task<Conversation> CreateAsync(string title, Guid connectionId, string model, Guid? personaId, CancellationToken cancellationToken = default)
     {
         var id = Guid.NewGuid();
         var now = DateTimeOffset.UtcNow;
@@ -18,13 +18,13 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
             """;
         cmd.Parameters.AddWithValue("$id", id.ToString("D"));
         cmd.Parameters.AddWithValue("$title", title);
-        cmd.Parameters.AddWithValue("$backend", backend);
+        cmd.Parameters.AddWithValue("$backend", connectionId.ToString("D"));
         cmd.Parameters.AddWithValue("$model", model);
         cmd.Parameters.AddWithValue("$persona", (object?)personaId?.ToString("D") ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$now", SqliteDatabase.Format(now));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
 
-        return new Conversation(id, title, backend, model, personaId, now, now, []);
+        return new Conversation(id, title, connectionId, model, personaId, now, now, []);
     }
 
     public async Task<Conversation?> GetAsync(Guid id, CancellationToken cancellationToken = default)
@@ -42,14 +42,15 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         }
 
         var title = reader.GetString(0);
-        var backend = reader.GetString(1);
+        // Rows written before connections existed hold a backend name here; they resolve to Guid.Empty (model unavailable).
+        var connectionId = Guid.TryParse(reader.GetString(1), out var parsed) ? parsed : Guid.Empty;
         var model = reader.GetString(2);
         Guid? personaId = reader.IsDBNull(3) ? null : Guid.Parse(reader.GetString(3));
         var createdAt = SqliteDatabase.Parse(reader.GetString(4));
         var updatedAt = SqliteDatabase.Parse(reader.GetString(5));
 
         var messages = await LoadMessagesAsync(connection, id, cancellationToken);
-        return new Conversation(id, title, backend, model, personaId, createdAt, updatedAt, messages);
+        return new Conversation(id, title, connectionId, model, personaId, createdAt, updatedAt, messages);
     }
 
     public async Task<IReadOnlyList<ConversationSummary>> ListAsync(CancellationToken cancellationToken = default)
@@ -88,30 +89,43 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
             }
         }
 
+        long messageId;
         await using (var insert = connection.CreateCommand())
         {
             insert.Transaction = (SqliteTransaction)tx;
             insert.CommandText = """
                 INSERT INTO messages (conversation_id, role, content, created_at)
                 VALUES ($cid, $role, $content, $now);
+                SELECT last_insert_rowid();
                 """;
             insert.Parameters.AddWithValue("$cid", conversationId.ToString("D"));
             insert.Parameters.AddWithValue("$role", message.Role.ToString());
             insert.Parameters.AddWithValue("$content", message.Content);
             insert.Parameters.AddWithValue("$now", now);
-            await insert.ExecuteNonQueryAsync(cancellationToken);
+            messageId = (long)(await insert.ExecuteScalarAsync(cancellationToken))!;
+        }
+
+        foreach (var image in message.Images)
+        {
+            await using var insertImage = connection.CreateCommand();
+            insertImage.Transaction = (SqliteTransaction)tx;
+            insertImage.CommandText = "INSERT INTO message_images (message_id, media_type, data) VALUES ($mid, $type, $data);";
+            insertImage.Parameters.AddWithValue("$mid", messageId);
+            insertImage.Parameters.AddWithValue("$type", image.MediaType);
+            insertImage.Parameters.AddWithValue("$data", image.Data);
+            await insertImage.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await tx.CommitAsync(cancellationToken);
     }
 
-    public async Task SetModelAsync(Guid conversationId, string backend, string model, CancellationToken cancellationToken = default)
+    public async Task SetModelAsync(Guid conversationId, Guid connectionId, string model, CancellationToken cancellationToken = default)
     {
         await using var connection = await db.OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = "UPDATE conversations SET backend = $backend, model = $model WHERE id = $id;";
         cmd.Parameters.AddWithValue("$id", conversationId.ToString("D"));
-        cmd.Parameters.AddWithValue("$backend", backend);
+        cmd.Parameters.AddWithValue("$backend", connectionId.ToString("D"));
         cmd.Parameters.AddWithValue("$model", model);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -137,15 +151,42 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
 
     private static async Task<IReadOnlyList<ChatMessage>> LoadMessagesAsync(SqliteConnection connection, Guid id, CancellationToken cancellationToken)
     {
+        var images = new Dictionary<long, List<ChatImage>>();
+        await using (var imageCmd = connection.CreateCommand())
+        {
+            imageCmd.CommandText = """
+                SELECT i.message_id, i.media_type, i.data
+                FROM message_images i
+                JOIN messages m ON m.id = i.message_id
+                WHERE m.conversation_id = $cid
+                ORDER BY i.id;
+                """;
+            imageCmd.Parameters.AddWithValue("$cid", id.ToString("D"));
+            await using var imageReader = await imageCmd.ExecuteReaderAsync(cancellationToken);
+            while (await imageReader.ReadAsync(cancellationToken))
+            {
+                var messageId = imageReader.GetInt64(0);
+                if (!images.TryGetValue(messageId, out var list))
+                {
+                    images[messageId] = list = [];
+                }
+                list.Add(new ChatImage(imageReader.GetString(1), (byte[])imageReader.GetValue(2)));
+            }
+        }
+
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT role, content FROM messages WHERE conversation_id = $cid ORDER BY id;";
+        cmd.CommandText = "SELECT id, role, content FROM messages WHERE conversation_id = $cid ORDER BY id;";
         cmd.Parameters.AddWithValue("$cid", id.ToString("D"));
 
         var messages = new List<ChatMessage>();
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            messages.Add(new ChatMessage(Enum.Parse<ChatRole>(reader.GetString(0)), reader.GetString(1)));
+            var messageId = reader.GetInt64(0);
+            messages.Add(new ChatMessage(
+                Enum.Parse<ChatRole>(reader.GetString(1)),
+                reader.GetString(2),
+                images.TryGetValue(messageId, out var list) ? list : null));
         }
         return messages;
     }

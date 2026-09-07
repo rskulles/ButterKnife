@@ -7,4 +7,26 @@ public enum ChatRole
     Assistant,
 }
 
-public sealed record ChatMessage(ChatRole Role, string Content);
+/// <summary>An image attached to a message, held in memory as raw bytes. Sent to each backend in its native encoding.</summary>
+public sealed record ChatImage(string MediaType, byte[] Data)
+{
+    public static readonly IReadOnlySet<string> SupportedMediaTypes =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "image/jpeg", "image/png", "image/gif", "image/webp" };
+
+    private string? _base64;
+    private string? _dataUrl;
+
+    public string Base64 => _base64 ??= Convert.ToBase64String(Data);
+
+    /// <summary>For &lt;img src&gt; and OpenAI-style image_url parts.</summary>
+    public string DataUrl => _dataUrl ??= $"data:{MediaType};base64,{Base64}";
+}
+
+public sealed record ChatMessage(ChatRole Role, string Content, IReadOnlyList<ChatImage>? Images = null)
+{
+    public static readonly IReadOnlyList<ChatImage> NoImages = Array.Empty<ChatImage>();
+
+    public IReadOnlyList<ChatImage> Images { get; init; } = Images ?? NoImages;
+
+    public bool HasImages => Images.Count > 0;
+}

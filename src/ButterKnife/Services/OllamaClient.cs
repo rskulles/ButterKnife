@@ -1,12 +1,13 @@
 using System.Runtime.CompilerServices;
+using ButterKnife.Data;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace ButterKnife.Services;
 
 /// <summary>Ollama native API: POST /api/chat (NDJSON stream), GET /api/tags.</summary>
-public sealed class OllamaClient(IHttpClientFactory httpClientFactory, string backendName, string? defaultModel)
-    : LlmClientBase(httpClientFactory, backendName, defaultModel)
+public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnection connection)
+    : LlmClientBase(httpClientFactory, connection)
 {
     public override async IAsyncEnumerable<string> StreamChatAsync(
         string model,
@@ -15,7 +16,10 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, string ba
     {
         var body = new ChatRequest(
             model,
-            messages.Select(m => new WireMessage(RoleName(m.Role), m.Content)).ToArray(),
+            messages.Select(m => new WireMessage(
+                RoleName(m.Role),
+                m.Content,
+                m.HasImages ? m.Images.Select(i => i.Base64).ToArray() : null)).ToArray(),
             Stream: true);
 
         var response = await PostStreamingAsync("api/chat", body, cancellationToken);
@@ -66,7 +70,7 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, string ba
 
     private sealed record ChatRequest(string Model, WireMessage[] Messages, bool Stream);
 
-    private sealed record WireMessage(string Role, string Content);
+    private sealed record WireMessage(string Role, string Content, string[]? Images = null);
 
     private sealed record ChatChunk(WireMessage? Message, bool Done, string? Error);
 

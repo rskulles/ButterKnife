@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
+using ButterKnife.Data;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ButterKnife.Services;
 
@@ -7,8 +9,8 @@ namespace ButterKnife.Services;
 /// OpenAI-style API: POST chat/completions (SSE stream), GET models.
 /// Covers LM Studio, vLLM, llama.cpp server, and Ollama's /v1 shim. BaseUrl must include the version prefix (…/v1).
 /// </summary>
-public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory, string backendName, string? defaultModel)
-    : LlmClientBase(httpClientFactory, backendName, defaultModel)
+public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory, LlmConnection connection)
+    : LlmClientBase(httpClientFactory, connection)
 {
     private const string DataPrefix = "data:";
     private const string DoneSentinel = "[DONE]";
@@ -20,7 +22,7 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
     {
         var body = new ChatRequest(
             model,
-            messages.Select(m => new WireMessage(RoleName(m.Role), m.Content)).ToArray(),
+            messages.Select(m => new WireMessage(RoleName(m.Role), BuildContent(m))).ToArray(),
             Stream: true);
 
         var response = await PostStreamingAsync("chat/completions", body, cancellationToken);
@@ -63,6 +65,23 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
         return models.Data.Select(m => m.Id).Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    /// <summary>Plain string when text-only (widest compatibility); otherwise the multimodal parts array.</summary>
+    private static object BuildContent(ChatMessage message)
+    {
+        if (!message.HasImages)
+        {
+            return message.Content;
+        }
+
+        var parts = new List<object>();
+        if (message.Content.Length > 0)
+        {
+            parts.Add(new TextPart(message.Content));
+        }
+        parts.AddRange(message.Images.Select(i => new ImagePart(new ImageUrl(i.DataUrl))));
+        return parts;
+    }
+
     private static string RoleName(ChatRole role) => role switch
     {
         ChatRole.System => "system",
@@ -73,7 +92,19 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
 
     private sealed record ChatRequest(string Model, WireMessage[] Messages, bool Stream);
 
-    private sealed record WireMessage(string Role, string Content);
+    private sealed record WireMessage(string Role, object Content);
+
+    private sealed record TextPart(string Text)
+    {
+        public string Type => "text";
+    }
+
+    private sealed record ImagePart([property: JsonPropertyName("image_url")] ImageUrl ImageUrl)
+    {
+        public string Type => "image_url";
+    }
+
+    private sealed record ImageUrl(string Url);
 
     private sealed record ChatChunk(Choice[]? Choices, ErrorBody? Error);
 

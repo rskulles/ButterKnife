@@ -6,7 +6,7 @@ export function wireInput(textarea, component) {
     textarea.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
             e.preventDefault();
-            if (!textarea.disabled && textarea.value.trim().length > 0) {
+            if (!textarea.disabled) {
                 component.invokeMethodAsync("SendFromKeyboardAsync");
             }
         }

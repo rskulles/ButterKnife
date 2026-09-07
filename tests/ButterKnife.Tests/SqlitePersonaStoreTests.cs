@@ -72,7 +72,7 @@ public sealed class SqlitePersonaStoreTests : IDisposable
     {
         var conversations = new SqliteConversationStore(_db);
         var custom = await _store.CreateAsync("Temp", "", "p", CancellationToken.None);
-        var conv = await conversations.CreateAsync("t", "b", "m", custom.Id, CancellationToken.None);
+        var conv = await conversations.CreateAsync("t", Guid.NewGuid(), "m", custom.Id, CancellationToken.None);
 
         await _store.DeleteAsync(custom.Id, CancellationToken.None);
 
