@@ -1,0 +1,282 @@
+@page "/"
+@using System.Diagnostics
+@using System.Text
+@using ButterKnife.Services
+@implements IAsyncDisposable
+@inject ILlmClientRegistry Registry
+@inject ModelCatalog Catalog
+@inject IJSRuntime JS
+
+<PageTitle>ButterKnife</PageTitle>
+
+<div class="chat">
+    <header class="chat-toolbar">
+        <label class="visually-hidden" for="model-select">Model</label>
+        <select id="model-select" class="form-select form-select-sm model-select"
+                value="@_selectedKey" @onchange="OnModelChanged" disabled="@_isStreaming">
+            @if (_models.Count == 0)
+            {
+                <option value="">@(_loadingModels ? "Loading models…" : "No models available")</option>
+            }
+            @foreach (var m in _models)
+            {
+                <option value="@m.Key">@m</option>
+            }
+        </select>
+
+        <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshModelsAsync" disabled="@(_isStreaming || _loadingModels)" title="Refresh model list">
+            ↻
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="NewChat" disabled="@_isStreaming">
+            New chat
+        </button>
+    </header>
+
+    @foreach (var (backend, message) in _backendErrors)
+    {
+        <div class="alert alert-warning py-1 px-2 small mb-1" role="alert">
+            <strong>@backend</strong> unreachable: @message
+        </div>
+    }
+
+    <div class="chat-messages" @ref="_messagesElement">
+        @if (_turns.Count == 0)
+        {
+            <p class="chat-empty text-muted">Pick a model and say something.</p>
+        }
+        @foreach (var turn in _turns)
+        {
+            <div class="msg msg-@turn.Role.ToString().ToLowerInvariant()">
+                <div class="msg-role">@turn.Role</div>
+                <div class="msg-content">@turn.Text@(turn.IsStreaming ? "▍" : "")</div>
+            </div>
+        }
+    </div>
+
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger py-1 px-2 small mb-1" role="alert">@_error</div>
+    }
+
+    <footer class="chat-input">
+        <textarea @ref="_inputElement" class="form-control" rows="2" placeholder="Message… (Enter to send, Shift+Enter for newline)"
+                  @bind="_input" @bind:event="oninput" disabled="@_isStreaming"></textarea>
+        @if (_isStreaming)
+        {
+            <button class="btn btn-danger" @onclick="Stop">Stop</button>
+        }
+        else
+        {
+            <button class="btn btn-primary" @onclick="SendAsync" disabled="@(!CanSend)">Send</button>
+        }
+    </footer>
+</div>
+
+@code {
+    private static readonly TimeSpan RenderInterval = TimeSpan.FromMilliseconds(50);
+
+    private readonly List<Turn> _turns = [];
+    private List<ModelDescriptor> _models = [];
+    private IReadOnlyDictionary<string, string> _backendErrors = new Dictionary<string, string>();
+    private string _selectedKey = "";
+    private string _input = "";
+    private string? _error;
+    private bool _isStreaming;
+    private bool _loadingModels;
+
+    private CancellationTokenSource? _generation;
+    private readonly CancellationTokenSource _disposed = new();
+
+    private ElementReference _messagesElement;
+    private ElementReference _inputElement;
+    private IJSObjectReference? _js;
+    private DotNetObjectReference<Chat>? _self;
+
+    private bool CanSend => !_isStreaming && !string.IsNullOrWhiteSpace(_input) && Selected is not null;
+
+    private ModelDescriptor? Selected => _models.FirstOrDefault(m => m.Key == _selectedKey);
+
+    protected override Task OnInitializedAsync() => RefreshModelsAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _js = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Chat.razor.js");
+            _self = DotNetObjectReference.Create(this);
+            // The textarea element survives re-renders (only its attributes change), so one wiring is enough.
+            await _js.InvokeVoidAsync("wireInput", _inputElement, _self);
+        }
+    }
+
+    private async Task RefreshModelsAsync()
+    {
+        _loadingModels = true;
+        _error = null;
+        try
+        {
+            var result = await Catalog.GetModelsAsync(_disposed.Token);
+            _models = result.Models.ToList();
+            _backendErrors = result.BackendErrors;
+
+            if (Selected is null)
+            {
+                _selectedKey = PickDefault()?.Key ?? "";
+            }
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loadingModels = false;
+        }
+    }
+
+    private ModelDescriptor? PickDefault()
+    {
+        foreach (var client in Registry.Clients)
+        {
+            if (client.DefaultModel is { } preferred &&
+                _models.FirstOrDefault(m => m.Backend == client.BackendName && m.Model == preferred) is { } match)
+            {
+                return match;
+            }
+        }
+        return _models.FirstOrDefault();
+    }
+
+    private void OnModelChanged(ChangeEventArgs e) => _selectedKey = e.Value?.ToString() ?? "";
+
+    private void NewChat()
+    {
+        _turns.Clear();
+        _error = null;
+    }
+
+    private void Stop() => _generation?.Cancel();
+
+    /// <summary>Called from JS when Enter (without Shift) is pressed in the textarea.</summary>
+    [JSInvokable]
+    public Task SendFromKeyboardAsync() => SendAsync();
+
+    private async Task SendAsync()
+    {
+        if (!CanSend || Selected is not { } model)
+        {
+            return;
+        }
+
+        var prompt = _input.Trim();
+        _input = "";
+        _error = null;
+
+        _turns.Add(new Turn(ChatRole.User, prompt));
+        var history = _turns.Select(t => new ChatMessage(t.Role, t.Text)).ToList();
+
+        var reply = new Turn(ChatRole.Assistant, "") { IsStreaming = true };
+        _turns.Add(reply);
+
+        _isStreaming = true;
+        _generation = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
+        var token = _generation.Token;
+
+        await RenderAndScrollAsync();
+
+        try
+        {
+            var client = Registry.Get(model.Backend);
+            var lastRender = Stopwatch.GetTimestamp();
+
+            await foreach (var delta in client.StreamChatAsync(model.Model, history, token))
+            {
+                reply.Append(delta);
+
+                if (Stopwatch.GetElapsedTime(lastRender) >= RenderInterval)
+                {
+                    await RenderAndScrollAsync();
+                    lastRender = Stopwatch.GetTimestamp();
+                }
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            if (_disposed.IsCancellationRequested)
+            {
+                return; // circuit is gone; nothing to render
+            }
+            reply.Append(reply.Text.Length == 0 ? "(stopped)" : " (stopped)");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            if (reply.Text.Length == 0)
+            {
+                _turns.Remove(reply);
+            }
+        }
+        finally
+        {
+            reply.IsStreaming = false;
+            _isStreaming = false;
+            _generation?.Dispose();
+            _generation = null;
+        }
+
+        await RenderAndScrollAsync();
+        if (_js is not null)
+        {
+            await _js.InvokeVoidAsync("focus", _inputElement);
+        }
+    }
+
+    private async Task RenderAndScrollAsync()
+    {
+        await InvokeAsync(StateHasChanged);
+        if (_js is not null)
+        {
+            try
+            {
+                await _js.InvokeVoidAsync("scrollToBottom", _messagesElement);
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed.Cancel();
+        _generation?.Dispose();
+        _disposed.Dispose();
+        _self?.Dispose();
+
+        if (_js is not null)
+        {
+            try
+            {
+                await _js.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+
+    /// <summary>Mutable UI-side message so streamed tokens can be appended in place.</summary>
+    private sealed class Turn(ChatRole role, string text)
+    {
+        private readonly StringBuilder _text = new(text);
+
+        public ChatRole Role { get; } = role;
+        public string Text => _text.ToString();
+        public bool IsStreaming { get; set; }
+
+        public void Append(string delta) => _text.Append(delta);
+    }
+}
