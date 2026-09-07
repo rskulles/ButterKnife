@@ -3,6 +3,7 @@ using ButterKnife.Data;
 using ButterKnife.Options;
 using ButterKnife.Services;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.Options;
 using Microsoft.JSInterop;
 
@@ -70,6 +71,7 @@ public partial class Chat : IAsyncDisposable
         _autoStop = DictationOptions.Value.AutoStopOnSilence;
         _autoSend = DictationOptions.Value.AutoSendAfterTranscription;
         ConnectionEvents.Changed += OnConnectionsChanged;
+        Events.Changed += OnConversationsChanged;
         await Task.WhenAll(RefreshModelsAsync(), LoadPersonasAsync());
 
         // First visit to "/": OnParametersSetAsync returns early (null id == null current id), so apply the default here.
@@ -118,6 +120,8 @@ public partial class Chat : IAsyncDisposable
         _title = null;
         _personaKey = DefaultPersonaKey();
         _compaction?.Cancel();
+        _confirmDelete = false;
+        _renamingTitle = false;
         _summary = null;
         _summaryThrough = 0;
         _contextTokens = null;
@@ -226,6 +230,101 @@ public partial class Chat : IAsyncDisposable
     }
 
     private void NewChat() => Nav.NavigateTo("/");
+
+    private bool _confirmDelete;
+    private bool _renamingTitle;
+    private string _renameText = "";
+
+    private void BeginRename()
+    {
+        _confirmDelete = false;
+        _renameText = _title ?? "";
+        _renamingTitle = true;
+    }
+
+    private async Task OnRenameKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await RenameConversationAsync();
+        }
+        else if (e.Key == "Escape")
+        {
+            _renamingTitle = false;
+        }
+    }
+
+    private async Task RenameConversationAsync()
+    {
+        if (_conversationId is not { } id || string.IsNullOrWhiteSpace(_renameText))
+        {
+            return;
+        }
+
+        try
+        {
+            await Store.SetTitleAsync(id, _renameText, _disposed.Token);
+            _title = _renameText.Trim();
+            _renamingTitle = false;
+            Events.NotifyChanged();
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not rename the chat: {ex.Message}";
+        }
+    }
+
+    /// <summary>The sidebar can rename the open chat; keep the page title in step.</summary>
+    private void OnConversationsChanged() =>
+        _ = InvokeAsync(async () =>
+        {
+            if (_conversationId is not { } id)
+            {
+                return;
+            }
+            try
+            {
+                var summary = (await Store.ListAsync(_disposed.Token)).FirstOrDefault(c => c.Id == id);
+                if (summary is not null && summary.Title != _title)
+                {
+                    _title = summary.Title;
+                    StateHasChanged();
+                }
+            }
+            catch (Exception)
+            {
+                // cosmetic; ignore
+            }
+        });
+
+    /// <summary>Deletes the open conversation (messages and images cascade) and returns to a fresh chat.</summary>
+    private async Task DeleteConversationAsync()
+    {
+        _confirmDelete = false;
+        if (_conversationId is not { } id)
+        {
+            return;
+        }
+
+        Stop();
+        _compaction?.Cancel();
+        try
+        {
+            await Store.DeleteAsync(id, _disposed.Token);
+            Events.NotifyChanged();
+            Nav.NavigateTo("/");
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not delete the chat: {ex.Message}";
+        }
+    }
 
     private void Stop() => _generation?.Cancel();
 
@@ -435,6 +534,7 @@ public partial class Chat : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         ConnectionEvents.Changed -= OnConnectionsChanged;
+        Events.Changed -= OnConversationsChanged;
         if (_js is not null && _dictation == DictationState.Recording)
         {
             try

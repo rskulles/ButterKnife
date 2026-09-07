@@ -185,6 +185,22 @@ public sealed class SqliteConversationStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task RenamesAndValidatesTitle()
+    {
+        var conv = await _store.CreateAsync("old", ConnA, "m", null, CancellationToken.None);
+
+        await _store.SetTitleAsync(conv.Id, "  New title  ", CancellationToken.None);
+        Assert.Equal("New title", (await _store.GetAsync(conv.Id, CancellationToken.None))!.Title);
+        Assert.Equal("New title", (await _store.ListAsync(CancellationToken.None)).Single().Title);
+
+        await _store.SetTitleAsync(conv.Id, new string('x', 500), CancellationToken.None);
+        Assert.Equal(SqliteConversationStore.MaxTitleLength, (await _store.GetAsync(conv.Id, CancellationToken.None))!.Title.Length);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.SetTitleAsync(conv.Id, "   ", CancellationToken.None));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => _store.SetTitleAsync(Guid.NewGuid(), "x", CancellationToken.None));
+    }
+
+    [Fact]
     public async Task GetMissingReturnsNull()
     {
         Assert.Null(await _store.GetAsync(Guid.NewGuid(), CancellationToken.None));

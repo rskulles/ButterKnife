@@ -23,12 +23,46 @@
             }
         </select>
 
-        <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshModelsAsync" disabled="@(_isStreaming || _loadingModels)" title="Refresh model list">
-            ↻
+        <button class="btn btn-sm btn-outline-secondary" @onclick="RefreshModelsAsync" disabled="@(_isStreaming || _loadingModels)" title="Refresh model list" aria-label="Refresh model list">
+            <i class="bi bi-arrow-clockwise" aria-hidden="true"></i>
         </button>
         <button class="btn btn-sm btn-outline-secondary" @onclick="NewChat" disabled="@_isStreaming">
             New chat
         </button>
+        @if (_conversationId is not null)
+        {
+            @if (_renamingTitle)
+            {
+                <span class="delete-confirm" role="group" aria-label="Rename chat">
+                    <input class="form-control form-control-sm rename-input" @bind="_renameText" @bind:event="oninput"
+                           @onkeydown="OnRenameKeyAsync" aria-label="Chat title" />
+                    <button class="btn btn-sm btn-primary" @onclick="RenameConversationAsync" disabled="@string.IsNullOrWhiteSpace(_renameText)">Save</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => _renamingTitle = false">Cancel</button>
+                </span>
+            }
+            else if (!_confirmDelete)
+            {
+                <button class="btn btn-sm btn-outline-secondary" @onclick="BeginRename" disabled="@_isStreaming"
+                        title="Rename this chat" aria-label="Rename this chat">
+                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                </button>
+            }
+            @if (_confirmDelete)
+            {
+                <span class="delete-confirm" role="alertdialog" aria-label="Delete this chat?">
+                    <span class="small">Delete this chat?</span>
+                    <button class="btn btn-sm btn-danger" @onclick="DeleteConversationAsync">Delete</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmDelete = false">Keep</button>
+                </span>
+            }
+            else if (!_renamingTitle)
+            {
+                <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = true" disabled="@_isStreaming"
+                        title="Delete this chat" aria-label="Delete this chat">
+                    <i class="bi bi-trash" aria-hidden="true"></i>
+                </button>
+            }
+        }
         <label class="visually-hidden" for="persona-select">Persona</label>
         <select id="persona-select" class="form-select form-select-sm persona-select ms-auto"
                 value="@_personaKey" @onchange="OnPersonaChangedAsync" disabled="@_isStreaming"
@@ -59,8 +93,9 @@
         var (used, exact) = CurrentContext();
         var percent = _contextWindow is { } window && window > 0 ? Math.Min(100, used * 100.0 / window) : (double?)null;
         <div class="context-meter" title="@ContextTooltip(used, exact)">
-            <div class="context-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@(percent is { } p ? (int)p : 0)">
-                <div class="context-fill @(percent >= 90 ? "context-danger" : percent >= 70 ? "context-warn" : "")" style="width: @((percent ?? 0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+            <div class="progress context-bar" role="progressbar" aria-label="Context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@(percent is { } p ? (int)p : 0)">
+                <div class="progress-bar @(percent >= 90 ? "bg-danger" : percent >= 70 ? "bg-warning" : "") @(percent is null ? "progress-bar-striped context-unknown" : "")"
+                     style="width: @((percent ?? 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></div>
             </div>
             <span class="context-text">
                 context @(exact ? "" : "~")@FormatTokens(used) / @(_contextWindow is { } w ? FormatTokens(w) : "?")
@@ -164,7 +199,7 @@
                         <div class="pending-image">
                             <img src="@image.DataUrl" alt="Pending attachment" />
                             <button type="button" class="pending-remove" title="Remove image" aria-label="Remove image"
-                                    @onclick="() => _pendingImages.Remove(image)" disabled="@_isStreaming">×</button>
+                                    @onclick="() => _pendingImages.Remove(image)" disabled="@_isStreaming"><i class="bi bi-x" aria-hidden="true"></i></button>
                         </div>
                     }
                 </div>
@@ -186,10 +221,10 @@
                 <button type="button" @ref="_micElement" class="btn btn-mic @(_dictation switch { DictationState.Recording => "btn-danger btn-mic-recording", DictationState.Transcribing => "btn-outline-secondary", _ => "btn-outline-secondary" })"
                         @onclick="ToggleDictationAsync" disabled="@(_isStreaming || _dictation == DictationState.Transcribing)"
                         title="@DictationTitle" aria-label="@DictationTitle" aria-pressed="@(_dictation == DictationState.Recording)">
-                    @(_dictation switch { DictationState.Recording => "■", DictationState.Transcribing => "…", _ => "🎤" })
+                    <i class="bi @(_dictation switch { DictationState.Recording => "bi-stop-fill", DictationState.Transcribing => "bi-hourglass-split", _ => "bi-mic-fill" })" aria-hidden="true"></i>
                 </button>
                 <button type="button" class="btn btn-outline-secondary btn-mic-settings" @onclick="() => _showDictationSettings = !_showDictationSettings"
-                        title="Dictation settings" aria-label="Dictation settings" aria-expanded="@_showDictationSettings" disabled="@(_dictation != DictationState.Idle)">⚙</button>
+                        title="Dictation settings" aria-label="Dictation settings" aria-expanded="@_showDictationSettings" disabled="@(_dictation != DictationState.Idle)"><i class="bi bi-gear" aria-hidden="true"></i></button>
                 @if (_showDictationSettings)
                 {
                     <div class="dictation-settings" role="dialog" aria-label="Dictation settings">
@@ -208,7 +243,7 @@
                 }
             </div>
             <label class="btn btn-outline-secondary btn-attach @(_isStreaming ? "disabled" : "")" title="Attach images (JPEG, PNG, GIF, WebP)">
-                <span aria-hidden="true">📎</span><span class="visually-hidden">Attach images</span>
+                <i class="bi bi-paperclip" aria-hidden="true"></i><span class="visually-hidden">Attach images</span>
                 <InputFile OnChange="OnFilesSelectedAsync" multiple accept="image/*" disabled="@_isStreaming" />
             </label>
             @if (_isStreaming)

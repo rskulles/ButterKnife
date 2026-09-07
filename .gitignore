@@ -483,3 +483,6 @@ $RECYCLE.BIN/
 
 # ButterKnife runtime data (SQLite conversation store)
 src/ButterKnife/data/
+
+# Client-side libraries are restored by LibMan (libman.json) at build time
+src/ButterKnife/wwwroot/lib/

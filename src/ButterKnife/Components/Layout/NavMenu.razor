@@ -15,30 +15,60 @@
     <nav class="nav flex-column">
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> New chat
+                <i class="bi bi-plus-square-fill nav-icon" aria-hidden="true"></i> New chat
             </NavLink>
         </div>
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="connections">
-                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Connections
+                <i class="bi bi-hdd-network nav-icon" aria-hidden="true"></i> Connections
             </NavLink>
         </div>
 
         @foreach (var c in _conversations)
         {
-            <div class="nav-item px-3 conversation-item">
-                <NavLink class="nav-link conversation-link" href="@($"chat/{c.Id}")" title="@c.Title">
-                    <span class="conversation-title">@c.Title</span>
-                </NavLink>
-                <button class="conversation-delete" title="Delete conversation" aria-label="Delete conversation"
-                        @onclick="() => DeleteAsync(c.Id)" @onclick:stopPropagation="true">×</button>
+            <div class="nav-item px-3 conversation-item @(_pendingDelete == c.Id ? "conversation-item-confirm" : "")">
+                @if (_pendingDelete == c.Id)
+                {
+                    <span class="conversation-confirm" role="alertdialog" aria-label="Delete this chat?">
+                        <span class="conversation-confirm-text">Delete?</span>
+                        <button type="button" class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(c.Id)" @onclick:stopPropagation="true">Delete</button>
+                        <button type="button" class="btn btn-sm btn-outline-light" @onclick="CancelDelete" @onclick:stopPropagation="true">Keep</button>
+                    </span>
+                }
+                else if (_renaming == c.Id)
+                {
+                    <span class="conversation-confirm" role="group" aria-label="Rename chat">
+                        <input class="form-control form-control-sm" @bind="_renameText" @bind:event="oninput"
+                               @onkeydown="e => OnRenameKeyAsync(e, c.Id)" @onclick:stopPropagation="true" aria-label="Chat title" />
+                        <button type="button" class="btn btn-sm btn-primary" @onclick="() => RenameAsync(c.Id)" @onclick:stopPropagation="true" disabled="@string.IsNullOrWhiteSpace(_renameText)">Save</button>
+                        <button type="button" class="btn btn-sm btn-outline-light" @onclick="CancelRename" @onclick:stopPropagation="true">Cancel</button>
+                    </span>
+                }
+                else
+                {
+                    <NavLink class="nav-link conversation-link" href="@($"chat/{c.Id}")" title="@c.Title">
+                        <i class="bi bi-chat-left-text nav-icon" aria-hidden="true"></i><span class="conversation-title">@c.Title</span>
+                    </NavLink>
+                    <button type="button" class="conversation-action" title="Rename chat" aria-label="Rename chat"
+                            @onclick="() => BeginRename(c)" @onclick:stopPropagation="true"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                    <button type="button" class="conversation-action" title="Delete chat" aria-label="Delete chat"
+                            @onclick="() => _pendingDelete = c.Id" @onclick:stopPropagation="true"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                }
             </div>
+        }
+        @if (_renameError is not null)
+        {
+            <div class="px-3 small text-warning">@_renameError</div>
         }
     </nav>
 </div>
 
 @code {
     private IReadOnlyList<ConversationSummary> _conversations = [];
+    private Guid? _pendingDelete;
+    private Guid? _renaming;
+    private string _renameText = "";
+    private string? _renameError;
 
     protected override async Task OnInitializedAsync()
     {
@@ -65,8 +95,53 @@
             StateHasChanged();
         });
 
+    private void CancelDelete() => _pendingDelete = null;
+
+    private void BeginRename(ConversationSummary c)
+    {
+        _pendingDelete = null;
+        _renaming = c.Id;
+        _renameText = c.Title;
+        _renameError = null;
+    }
+
+    private void CancelRename() => _renaming = null;
+
+    private async Task OnRenameKeyAsync(KeyboardEventArgs e, Guid id)
+    {
+        if (e.Key == "Enter")
+        {
+            await RenameAsync(id);
+        }
+        else if (e.Key == "Escape")
+        {
+            CancelRename();
+        }
+    }
+
+    private async Task RenameAsync(Guid id)
+    {
+        if (string.IsNullOrWhiteSpace(_renameText))
+        {
+            return;
+        }
+
+        try
+        {
+            await Store.SetTitleAsync(id, _renameText);
+            _renaming = null;
+            Events.NotifyChanged();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _renameError = ex.Message;
+        }
+    }
+
     private async Task DeleteAsync(Guid id)
     {
+        _pendingDelete = null;
         await Store.DeleteAsync(id);
         Events.NotifyChanged();
 

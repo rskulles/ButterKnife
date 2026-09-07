@@ -17,7 +17,8 @@ image attachments, dictates prompts through a local Whisper server, and keeps ev
   older turns so long chats keep fitting, on demand or automatically.
 - **Dictation**: a microphone button that records, stops when you pause, and transcribes via a local Whisper server
   (Speaches, faster-whisper-server, whisper.cpp, LocalAI) or the browser's own speech recognition.
-- Everything persists server-side, so a phone and a laptop on the LAN see the same conversations.
+- Everything persists server-side, so a phone and a laptop on the LAN see the same conversations. Chats can be
+  renamed and deleted from the sidebar or the chat toolbar, with an inline confirmation before deleting.
 
 ## Quick start
 
@@ -89,6 +90,15 @@ How the pieces fit:
 `CLAUDE.md` goes deeper into the conventions and the reasons behind them.
 
 ## Development
+
+The stylesheet is a [Bootswatch](https://bootswatch.com) "morph" build of Bootstrap 5.3.8 committed at `wwwroot/bootstrap.min.css`; swap that file to re-theme. Bootstrap's JS bundle and Bootstrap Icons are managed by [LibMan](https://learn.microsoft.com/aspnet/core/client-side/libman/):
+`src/ButterKnife/libman.json` pins them and `dotnet build` restores them into `wwwroot/lib/` (git-ignored). To add or
+update one, use the CLI, which is a local dotnet tool (`dotnet tool restore` once after cloning):
+
+```bash
+dotnet tool restore
+cd src/ButterKnife && dotnet libman install <library>@<version> --files <path> ...
+```
 
 ```bash
 dotnet build

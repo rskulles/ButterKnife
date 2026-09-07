@@ -7,7 +7,7 @@
 
 .knife-stats {
     font-size: 0.75rem;
-    color: #6c757d;
+    color: var(--bs-secondary-color);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
 }

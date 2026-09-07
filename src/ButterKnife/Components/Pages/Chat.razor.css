@@ -7,6 +7,7 @@
 
 .chat-toolbar {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.5rem;
     align-items: center;
 }
@@ -15,11 +16,25 @@
     white-space: nowrap;
 }
 
+.delete-confirm {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.rename-input {
+    width: 16rem;
+}
+
 .model-select {
+    flex: 1 1 14rem;
+    min-width: 12rem;
     max-width: 28rem;
 }
 
 .persona-select {
+    flex: 0 1 12rem;
+    min-width: 9rem;
     max-width: 14rem;
 }
 
@@ -27,7 +42,7 @@
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--bs-border-color, #dee2e6);
     border-radius: 0.375rem;
-    background: #fffbea;
+    background: var(--bs-warning-bg-subtle);
 }
 
 .persona-prompt-text {
@@ -62,7 +77,7 @@
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #6c757d;
+    color: var(--bs-secondary-color);
     margin-bottom: 0.15rem;
 }
 
@@ -75,11 +90,11 @@
     overflow-wrap: anywhere;
     padding: 0.5rem 0.75rem;
     border-radius: 0.5rem;
-    background: #f1f3f5;
+    background: var(--bs-tertiary-bg);
 }
 
 .msg-user .msg-content {
-    background: #d7e8ff;
+    background: var(--bs-primary-bg-subtle);
 }
 
 .chat-input {
@@ -136,7 +151,7 @@
     bottom: calc(100% + 0.35rem);
     width: 19rem;
     padding: 0.6rem 0.75rem;
-    background: #fff;
+    background: var(--bs-body-bg);
     border: 1px solid var(--bs-border-color, #dee2e6);
     border-radius: 0.375rem;
     box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.12);
@@ -186,7 +201,7 @@
     height: 1.3rem;
     border-radius: 50%;
     border: 0;
-    background: #dc3545;
+    background: var(--bs-danger);
     color: #fff;
     font-size: 0.9rem;
     line-height: 1;
@@ -255,14 +270,14 @@
 
 .msg-markdown ::deep th,
 .msg-markdown ::deep td {
-    border: 1px solid #ced4da;
+    border: 1px solid var(--bs-border-color);
     padding: 0.2rem 0.5rem;
 }
 
 .msg-markdown ::deep blockquote {
-    border-left: 3px solid #adb5bd;
+    border-left: 3px solid var(--bs-secondary-border-subtle);
     padding-left: 0.6rem;
-    color: #495057;
+    color: var(--bs-secondary-color);
     margin: 0 0 0.5rem;
 }
 
@@ -274,7 +289,7 @@
 
 .msg-stats {
     font-size: 0.7rem;
-    color: #8a939c;
+    color: var(--bs-secondary-color);
     margin-top: 0.15rem;
     font-variant-numeric: tabular-nums;
 }
@@ -285,31 +300,28 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.75rem;
-    color: #6c757d;
+    color: var(--bs-secondary-color);
 }
 
+/* Bootstrap's .progress supplies the themed track at the theme's own height; we only let it stretch and add the "window unknown" state. */
 .context-bar {
-    flex: 1;
-    max-width: 16rem;
-    height: 0.4rem;
-    background: #e9ecef;
-    border-radius: 0.2rem;
-    overflow: hidden;
+    flex: 1 1 12rem;
+    max-width: 28rem;
+    height: 0.75rem; /* half the theme's default; the pill radius and inset shadow still come from the theme */
 }
 
-.context-fill {
-    height: 100%;
-    background: #0d6efd;
-    border-radius: 0.2rem;
+.context-meter {
+    flex-wrap: wrap;
+}
+
+.context-bar ::deep .progress-bar {
     transition: width 0.3s ease;
 }
 
-.context-fill.context-warn {
-    background: #ffc107;
-}
-
-.context-fill.context-danger {
-    background: #dc3545;
+/* No window known: a faint striped bar spanning the track says "no scale" rather than "0%". */
+.context-bar ::deep .context-unknown {
+    background-color: var(--bs-secondary-bg-subtle);
+    opacity: 0.6;
 }
 
 .context-text {
@@ -327,7 +339,7 @@
     text-align: center;
     margin: 0.5rem 0 0.75rem;
     padding-top: 0.5rem;
-    border-top: 1px dashed #ced4da;
+    border-top: 1px dashed var(--bs-border-color);
     font-size: 0.8rem;
 }
 
@@ -340,6 +352,6 @@
     margin-top: 0.4rem;
     padding: 0.5rem 0.75rem;
     border-radius: 0.375rem;
-    background: #fffbea;
+    background: var(--bs-warning-bg-subtle);
     font-size: 0.85rem;
 }

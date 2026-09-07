@@ -134,6 +134,31 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public const int MaxTitleLength = 120;
+
+    public async Task SetTitleAsync(Guid conversationId, string title, CancellationToken cancellationToken = default)
+    {
+        var clean = (title ?? "").Trim();
+        if (clean.Length == 0)
+        {
+            throw new ArgumentException("Title is required.", nameof(title));
+        }
+        if (clean.Length > MaxTitleLength)
+        {
+            clean = clean[..MaxTitleLength].TrimEnd();
+        }
+
+        await using var connection = await db.OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE conversations SET title = $title WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$id", conversationId.ToString("D"));
+        cmd.Parameters.AddWithValue("$title", clean);
+        if (await cmd.ExecuteNonQueryAsync(cancellationToken) == 0)
+        {
+            throw new KeyNotFoundException($"Conversation {conversationId} does not exist.");
+        }
+    }
+
     public async Task SetPersonaAsync(Guid conversationId, Guid? personaId, CancellationToken cancellationToken = default)
     {
         await using var connection = await db.OpenAsync(cancellationToken);

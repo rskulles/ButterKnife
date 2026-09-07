@@ -16,6 +16,9 @@ public interface IConversationStore
 
     Task SetModelAsync(Guid conversationId, Guid connectionId, string model, CancellationToken cancellationToken = default);
 
+    /// <summary>Renames the conversation. Blank titles are rejected; long ones are trimmed to a sane length.</summary>
+    Task SetTitleAsync(Guid conversationId, string title, CancellationToken cancellationToken = default);
+
     /// <summary>Null clears the persona. The persona's prompt is looked up at request time, so edits apply to later turns.</summary>
     Task SetPersonaAsync(Guid conversationId, Guid? personaId, CancellationToken cancellationToken = default);
 
