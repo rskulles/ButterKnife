@@ -19,6 +19,25 @@
         "font/fonts/bootstrap-icons.woff2",
         "font/fonts/bootstrap-icons.woff"
       ]
+    },
+    {
+      "provider": "jsdelivr",
+      "library": "@fontsource/nunito@5.3.0",
+      "destination": "wwwroot/lib/nunito",
+      "files": [
+        "latin-400.css",
+        "latin-600.css",
+        "latin-700.css",
+        "latin-ext-400.css",
+        "latin-ext-600.css",
+        "latin-ext-700.css",
+        "files/nunito-latin-400-normal.woff2",
+        "files/nunito-latin-600-normal.woff2",
+        "files/nunito-latin-700-normal.woff2",
+        "files/nunito-latin-ext-400-normal.woff2",
+        "files/nunito-latin-ext-600-normal.woff2",
+        "files/nunito-latin-ext-700-normal.woff2"
+      ]
     }
   ]
 }
