@@ -91,6 +91,14 @@
                 @if (turn.Role == ChatRole.Assistant)
                 {
                     <div class="msg-content msg-markdown">@turn.Html@(turn.IsStreaming ? "▍" : "")</div>
+                    @if (turn.IsStreaming)
+                    {
+                        <ButterKnifeThrobber Stats="() => (turn.Elapsed, turn.Chunks)" />
+                    }
+                    else if (turn.Chunks > 0)
+                    {
+                        <div class="msg-stats" title="Token count is approximate: it counts streamed chunks">@ButterKnifeThrobber.FormatStats(turn.Elapsed, turn.Chunks)</div>
+                    }
                 }
                 else
                 {
@@ -605,11 +613,38 @@
     {
         private readonly StringBuilder _text = new(text);
         private MarkupString? _html;
+        private bool _isStreaming;
+        private long _startedAt;
+        private long? _endedAt;
 
         public ChatRole Role { get; } = role;
         public IReadOnlyList<ChatImage> Images { get; } = images ?? ChatMessage.NoImages;
         public string Text => _text.ToString();
-        public bool IsStreaming { get; set; }
+
+        /// <summary>Streamed chunks; a close stand-in for tokens on every backend we speak to.</summary>
+        public int Chunks { get; private set; }
+
+        public bool IsStreaming
+        {
+            get => _isStreaming;
+            set
+            {
+                if (value && !_isStreaming)
+                {
+                    _startedAt = Stopwatch.GetTimestamp();
+                    _endedAt = null;
+                }
+                else if (!value && _isStreaming)
+                {
+                    _endedAt = Stopwatch.GetTimestamp();
+                }
+                _isStreaming = value;
+            }
+        }
+
+        public TimeSpan Elapsed => _startedAt == 0
+            ? TimeSpan.Zero
+            : Stopwatch.GetElapsedTime(_startedAt, _endedAt ?? Stopwatch.GetTimestamp());
 
         public MarkupString Html => _html ??= new MarkupString(markdown.ToHtml(Text));
 
@@ -617,6 +652,7 @@
         {
             _text.Append(delta);
             _html = null;
+            Chunks++;
         }
     }
 }

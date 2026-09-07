@@ -1,0 +1,122 @@
+@* A little butter knife that throbs while a reply streams, with live generation stats beside it.
+   Click the knife and it does a full spin, then goes back to throbbing. *@
+@implements IDisposable
+
+<div class="knife-row">
+    <button type="button" class="knife @(_spinning ? "knife-spin" : "knife-throb")"
+            title="@(_spinning ? "Wheee" : "Generating… (click me)")" aria-label="Generating response"
+            @onclick="SpinAsync">
+        <svg viewBox="0 0 64 20" width="40" height="12.5" aria-hidden="true" focusable="false">
+            <defs>
+                <linearGradient id="knife-blade" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#f4f6f8" />
+                    <stop offset="0.55" stop-color="#c9d1d9" />
+                    <stop offset="1" stop-color="#9aa5b1" />
+                </linearGradient>
+                <linearGradient id="knife-handle" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#6b4a2b" />
+                    <stop offset="1" stop-color="#3e2a17" />
+                </linearGradient>
+            </defs>
+            <!-- handle -->
+            <rect x="0.5" y="5.5" width="22" height="9" rx="4" fill="url(#knife-handle)" />
+            <rect x="3" y="7.5" width="16" height="1.2" rx="0.6" fill="#8a6a45" opacity="0.7" />
+            <!-- bolster -->
+            <rect x="21" y="5" width="3" height="10" rx="1" fill="#7d8791" />
+            <!-- blade: wide with a rounded, slightly upturned tip like a real butter knife -->
+            <path d="M24 6 H50 C58 6 63 8.5 63 11.5 C63 13.8 59 15 54 15 H24 Z" fill="url(#knife-blade)" stroke="#8b949e" stroke-width="0.6" />
+            <path d="M26 8 H49" stroke="#ffffff" stroke-width="0.8" opacity="0.6" stroke-linecap="round" />
+        </svg>
+    </button>
+
+    @if (Stats is not null)
+    {
+        var (elapsed, tokens) = Stats();
+        <span class="knife-stats" title="Token count is approximate: it counts streamed chunks">@FormatStats(elapsed, tokens, live: true)</span>
+    }
+</div>
+
+@code {
+    /// <summary>Must match the knife-spin animation duration in the scoped CSS.</summary>
+    private static readonly TimeSpan SpinDuration = TimeSpan.FromMilliseconds(750);
+
+    private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>Live values; read on every tick so the clock runs even when no tokens arrive.</summary>
+    [Parameter] public Func<(TimeSpan Elapsed, int Tokens)>? Stats { get; set; }
+
+    private readonly CancellationTokenSource _stopped = new();
+    private bool _spinning;
+    private int _spinToken;
+
+    protected override void OnInitialized()
+    {
+        if (Stats is not null)
+        {
+            _ = TickAsync();
+        }
+    }
+
+    private async Task TickAsync()
+    {
+        using var timer = new PeriodicTimer(TickInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_stopped.Token))
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task SpinAsync()
+    {
+        // Re-clicking mid-spin: bump the token so the earlier delay does not end the new spin early,
+        // and drop the class for one render so the CSS animation restarts.
+        var token = ++_spinToken;
+        _spinning = false;
+        StateHasChanged();
+        await Task.Yield();
+        _spinning = true;
+        StateHasChanged();
+
+        await Task.Delay(SpinDuration);
+        if (token == _spinToken)
+        {
+            _spinning = false;
+        }
+    }
+
+    /// <summary>"2.4s · 87 tokens · 36 tok/s"; while live and before the first token, "1.2s · waiting for first token…".</summary>
+    public static string FormatStats(TimeSpan elapsed, int tokens, bool live = false)
+    {
+        var parts = new List<string> { FormatElapsed(elapsed) };
+        if (tokens > 0)
+        {
+            parts.Add($"{tokens} tokens");
+            if (elapsed.TotalSeconds >= 0.5)
+            {
+                parts.Add($"{tokens / elapsed.TotalSeconds:0} tok/s");
+            }
+        }
+        else if (live)
+        {
+            parts.Add("waiting for first token…");
+        }
+        return string.Join(" · ", parts);
+    }
+
+    public static string FormatElapsed(TimeSpan elapsed) =>
+        elapsed.TotalSeconds < 60
+            ? $"{elapsed.TotalSeconds:0.0}s"
+            : $"{(int)elapsed.TotalMinutes}:{elapsed.Seconds:00}";
+
+    public void Dispose()
+    {
+        _stopped.Cancel();
+        _stopped.Dispose();
+    }
+}
