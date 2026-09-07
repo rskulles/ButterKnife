@@ -1,4 +1,5 @@
 @page "/"
+@page "/chat/{Id:guid}"
 @using System.Diagnostics
 @using System.Text
 @using ButterKnife.Services
@@ -7,8 +8,11 @@
 @inject ModelCatalog Catalog
 @inject IJSRuntime JS
 @inject MarkdownRenderer Markdown
+@inject IConversationStore Store
+@inject ConversationEvents Events
+@inject NavigationManager Nav
 
-<PageTitle>ButterKnife</PageTitle>
+<PageTitle>@(_title is null ? "ButterKnife" : $"{_title} · ButterKnife")</PageTitle>
 
 <div class="chat">
     <header class="chat-toolbar">
@@ -83,7 +87,13 @@
 @code {
     private static readonly TimeSpan RenderInterval = TimeSpan.FromMilliseconds(50);
 
+    private const int MaxTitleLength = 60;
+
+    [Parameter] public Guid? Id { get; set; }
+
     private readonly List<Turn> _turns = [];
+    private Guid? _conversationId;
+    private string? _title;
     private List<ModelDescriptor> _models = [];
     private IReadOnlyDictionary<string, string> _backendErrors = new Dictionary<string, string>();
     private string _selectedKey = "";
@@ -105,6 +115,49 @@
     private ModelDescriptor? Selected => _models.FirstOrDefault(m => m.Key == _selectedKey);
 
     protected override Task OnInitializedAsync() => RefreshModelsAsync();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Id == _conversationId)
+        {
+            return; // same conversation (including the navigation we trigger ourselves after creating one)
+        }
+
+        Stop(); // navigating away mid-generation cancels it; the partial reply is persisted by SendAsync
+        _turns.Clear();
+        _error = null;
+        _conversationId = Id;
+        _title = null;
+
+        if (Id is not { } id)
+        {
+            return;
+        }
+
+        var conversation = await Store.GetAsync(id, _disposed.Token);
+        if (conversation is null)
+        {
+            _conversationId = null;
+            Nav.NavigateTo("/", replace: true);
+            return;
+        }
+
+        _title = conversation.Title;
+        foreach (var message in conversation.Messages)
+        {
+            _turns.Add(new Turn(message.Role, message.Content, Markdown));
+        }
+
+        var saved = new ModelDescriptor(conversation.Backend, conversation.Model);
+        if (_models.Any(m => m.Key == saved.Key))
+        {
+            _selectedKey = saved.Key;
+        }
+        else if (_models.Count > 0)
+        {
+            _error = $"Model {saved} is no longer available; pick another to continue.";
+        }
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -160,11 +213,7 @@
 
     private void OnModelChanged(ChangeEventArgs e) => _selectedKey = e.Value?.ToString() ?? "";
 
-    private void NewChat()
-    {
-        _turns.Clear();
-        _error = null;
-    }
+    private void NewChat() => Nav.NavigateTo("/");
 
     private void Stop() => _generation?.Cancel();
 
@@ -183,6 +232,23 @@
         _input = "";
         _error = null;
 
+        Guid conversationId;
+        try
+        {
+            conversationId = await EnsureConversationAsync(model, prompt);
+            await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.User, prompt), _disposed.Token);
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not save the message: {ex.Message}";
+            _input = prompt;
+            return;
+        }
+
         _turns.Add(new Turn(ChatRole.User, prompt, Markdown));
         var history = _turns.Select(t => new ChatMessage(t.Role, t.Text)).ToList();
 
@@ -195,6 +261,7 @@
 
         await RenderAndScrollAsync();
 
+        string? completedText = null;
         try
         {
             var client = Registry.Get(model.Backend);
@@ -210,11 +277,15 @@
                     lastRender = Stopwatch.GetTimestamp();
                 }
             }
+
+            completedText = reply.Text;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
+            completedText = reply.Text; // keep whatever streamed before Stop / disconnect
             if (_disposed.IsCancellationRequested)
             {
+                await PersistReplyAsync(conversationId, completedText);
                 return; // circuit is gone; nothing to render
             }
             reply.Append(reply.Text.Length == 0 ? "(stopped)" : " (stopped)");
@@ -235,11 +306,54 @@
             _generation = null;
         }
 
+        await PersistReplyAsync(conversationId, completedText);
         await RenderAndScrollAsync();
         if (_js is not null)
         {
             await _js.InvokeVoidAsync("focus", _inputElement);
         }
+    }
+
+    /// <summary>Creates the conversation on first send and moves the URL to it; keeps the stored model in sync afterwards.</summary>
+    private async Task<Guid> EnsureConversationAsync(ModelDescriptor model, string firstPrompt)
+    {
+        if (_conversationId is { } existing)
+        {
+            await Store.SetModelAsync(existing, model.Backend, model.Model, _disposed.Token);
+            return existing;
+        }
+
+        var title = MakeTitle(firstPrompt);
+        var conversation = await Store.CreateAsync(title, model.Backend, model.Model, _disposed.Token);
+        _conversationId = conversation.Id;
+        _title = title;
+        Events.NotifyChanged();
+        Nav.NavigateTo($"/chat/{conversation.Id}", replace: true); // same component instance; OnParametersSetAsync sees the id already loaded
+        return conversation.Id;
+    }
+
+    private async Task PersistReplyAsync(Guid conversationId, string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        try
+        {
+            await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.Assistant, text), CancellationToken.None);
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Reply was not saved: {ex.Message}";
+        }
+    }
+
+    private static string MakeTitle(string prompt)
+    {
+        var firstLine = prompt.Split('\n', 2)[0].Trim();
+        return firstLine.Length <= MaxTitleLength ? firstLine : firstLine[..MaxTitleLength].TrimEnd() + "…";
     }
 
     private async Task RenderAndScrollAsync()

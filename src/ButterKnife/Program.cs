@@ -1,4 +1,5 @@
 using ButterKnife.Components;
+using ButterKnife.Data;
 using ButterKnife.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -7,6 +8,7 @@ builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
 builder.Services.AddLlmBackends(builder.Configuration);
+builder.Services.AddConversationStore(builder.Configuration);
 
 var app = builder.Build();
 

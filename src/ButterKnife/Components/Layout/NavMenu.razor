@@ -1,3 +1,8 @@
+@implements IDisposable
+@inject IConversationStore Store
+@inject ConversationEvents Events
+@inject NavigationManager Nav
+
 <div class="top-row ps-3 navbar navbar-dark">
     <div class="container-fluid">
         <a class="navbar-brand" href="">ButterKnife</a>
@@ -10,8 +15,62 @@
     <nav class="nav flex-column">
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
-                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Chat
+                <span class="bi bi-plus-square-fill-nav-menu" aria-hidden="true"></span> New chat
             </NavLink>
         </div>
+
+        @foreach (var c in _conversations)
+        {
+            <div class="nav-item px-3 conversation-item">
+                <NavLink class="nav-link conversation-link" href="@($"chat/{c.Id}")" title="@c.Title">
+                    <span class="conversation-title">@c.Title</span>
+                </NavLink>
+                <button class="conversation-delete" title="Delete conversation" aria-label="Delete conversation"
+                        @onclick="() => DeleteAsync(c.Id)" @onclick:stopPropagation="true">×</button>
+            </div>
+        }
     </nav>
 </div>
+
+@code {
+    private IReadOnlyList<ConversationSummary> _conversations = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Events.Changed += OnConversationsChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _conversations = await Store.ListAsync();
+        }
+        catch
+        {
+            _conversations = [];
+        }
+    }
+
+    private void OnConversationsChanged() =>
+        _ = InvokeAsync(async () =>
+        {
+            await LoadAsync();
+            StateHasChanged();
+        });
+
+    private async Task DeleteAsync(Guid id)
+    {
+        await Store.DeleteAsync(id);
+        Events.NotifyChanged();
+
+        var current = Nav.ToBaseRelativePath(Nav.Uri);
+        if (current.Equals($"chat/{id}", StringComparison.OrdinalIgnoreCase))
+        {
+            Nav.NavigateTo("/");
+        }
+    }
+
+    public void Dispose() => Events.Changed -= OnConversationsChanged;
+}

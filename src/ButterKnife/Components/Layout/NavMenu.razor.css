@@ -103,3 +103,51 @@
         overflow-y: auto;
     }
 }
+
+/* Bootstrap's .nav wraps; in a wrapping column flexbox each line sizes to its widest item's content,
+   so a long conversation title would widen every row past the sidebar. Keep a single column. */
+nav.nav {
+    flex-wrap: nowrap;
+}
+
+.conversation-item {
+    display: flex;
+    align-items: center;
+    padding-bottom: 0;
+    min-width: 0;
+}
+
+/* The anchor is rendered by NavLink, so the scoped attribute is not on it: reach it with ::deep. */
+.conversation-item ::deep .conversation-link {
+    flex: 1;
+    min-width: 0;
+    height: 2.5rem;
+    display: flex;
+    align-items: center;
+}
+
+.conversation-title {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.85rem;
+}
+
+.conversation-delete {
+    background: transparent;
+    border: 0;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 0 0.4rem;
+    visibility: hidden;
+}
+
+.conversation-item:hover .conversation-delete {
+    visibility: visible;
+}
+
+.conversation-delete:hover {
+    color: #fff;
+}

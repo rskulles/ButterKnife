@@ -480,3 +480,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# ButterKnife runtime data (SQLite conversation store)
+src/ButterKnife/data/
