@@ -42,7 +42,7 @@ public sealed class AnthropicLlmClient : ILlmClient
 
     public string? DefaultModel => _connection.DefaultModel;
 
-    public async IAsyncEnumerable<string> StreamChatAsync(
+    public async IAsyncEnumerable<ChatDelta> StreamChatAsync(
         string model,
         IReadOnlyList<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -63,16 +63,32 @@ public sealed class AnthropicLlmClient : ILlmClient
             : new MessageCreateParams { Model = model, MaxTokens = MaxOutputTokens, Messages = chatMessages };
 
         var refused = false;
+        int? inputTokens = null;
+        int? outputTokens = null;
+
         await foreach (var streamEvent in _client.Messages.CreateStreaming(parameters, cancellationToken))
         {
             if (streamEvent.TryPickContentBlockDelta(out var blockDelta) && blockDelta.Delta.TryPickText(out var text))
             {
-                yield return text.Text;
+                yield return ChatDelta.FromText(text.Text);
             }
-            else if (streamEvent.TryPickDelta(out var messageDelta) && messageDelta.Delta.StopReason == StopReason.Refusal)
+            else if (streamEvent.TryPickStart(out var start))
             {
-                refused = true;
+                inputTokens = (int?)start.Message.Usage.InputTokens;
             }
+            else if (streamEvent.TryPickDelta(out var messageDelta))
+            {
+                outputTokens = (int?)messageDelta.Usage.OutputTokens;
+                if (messageDelta.Delta.StopReason == StopReason.Refusal)
+                {
+                    refused = true;
+                }
+            }
+        }
+
+        if (inputTokens is not null || outputTokens is not null)
+        {
+            yield return ChatDelta.FromUsage(new TokenUsage(inputTokens, outputTokens));
         }
 
         if (refused)
@@ -102,6 +118,28 @@ public sealed class AnthropicLlmClient : ILlmClient
             blocks.Add(new TextBlockParam { Text = message.Content });
         }
         return blocks;
+    }
+
+    public async Task<int?> GetContextWindowAsync(string model, CancellationToken cancellationToken = default)
+    {
+        if (_connection.ContextWindow is { } configured)
+        {
+            return configured;
+        }
+
+        try
+        {
+            var info = await _client.Models.Retrieve(new Anthropic.Models.Models.ModelRetrieveParams { ModelID = model }, cancellationToken);
+            return info.MaxInputTokens is > 0 ? (int?)info.MaxInputTokens : null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     public async Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken = default)

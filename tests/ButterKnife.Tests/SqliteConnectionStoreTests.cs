@@ -22,7 +22,7 @@ public sealed class SqliteConnectionStoreTests : IDisposable
     [Fact]
     public async Task RoundTripsAndProtectsApiKeyAtRest()
     {
-        var created = await _store.CreateAsync(" Claude ", BackendKind.Anthropic, "https://api.anthropic.com/ ", "sk-ant-secret", "claude-opus-5", CancellationToken.None);
+        var created = await _store.CreateAsync(" Claude ", BackendKind.Anthropic, "https://api.anthropic.com/ ", "sk-ant-secret", "claude-opus-5", null, CancellationToken.None);
 
         var loaded = await _store.GetAsync(created.Id, CancellationToken.None);
         Assert.NotNull(loaded);
@@ -42,29 +42,39 @@ public sealed class SqliteConnectionStoreTests : IDisposable
     [Fact]
     public async Task ListsByNameUpdatesAndDeletes()
     {
-        var b = await _store.CreateAsync("beta", BackendKind.Ollama, "http://b:11434", null, null, CancellationToken.None);
-        var a = await _store.CreateAsync("Alpha", BackendKind.OpenAiCompatible, "http://a:1234/v1", null, null, CancellationToken.None);
+        var b = await _store.CreateAsync("beta", BackendKind.Ollama, "http://b:11434", null, null, null, CancellationToken.None);
+        var a = await _store.CreateAsync("Alpha", BackendKind.OpenAiCompatible, "http://a:1234/v1", null, null, null, CancellationToken.None);
 
         Assert.Equal(["Alpha", "beta"], (await _store.ListAsync(CancellationToken.None)).Select(c => c.Name));
 
-        await _store.UpdateAsync(b.Id, "Zeta", BackendKind.Ollama, "http://z:11434", "key", "m", CancellationToken.None);
+        await _store.UpdateAsync(b.Id, "Zeta", BackendKind.Ollama, "http://z:11434", "key", "m", null, CancellationToken.None);
         var updated = await _store.GetAsync(b.Id, CancellationToken.None);
         Assert.Equal(("Zeta", "http://z:11434", "key", "m"), (updated!.Name, updated.BaseUrl, updated.ApiKey, updated.DefaultModel));
 
-        await _store.UpdateAsync(b.Id, "Zeta", BackendKind.Ollama, "http://z:11434", null, null, CancellationToken.None);
+        await _store.UpdateAsync(b.Id, "Zeta", BackendKind.Ollama, "http://z:11434", null, null, null, CancellationToken.None);
         Assert.False((await _store.GetAsync(b.Id, CancellationToken.None))!.HasApiKey);
 
         await _store.DeleteAsync(a.Id, CancellationToken.None);
         Assert.Single(await _store.ListAsync(CancellationToken.None));
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => _store.UpdateAsync(a.Id, "x", BackendKind.Ollama, "http://x/", null, null, CancellationToken.None));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => _store.UpdateAsync(a.Id, "x", BackendKind.Ollama, "http://x/", null, null, null, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StoresContextWindowOverride()
+    {
+        var c = await _store.CreateAsync("Ollama", BackendKind.Ollama, "http://o:11434", null, null, 32768, CancellationToken.None);
+        Assert.Equal(32768, (await _store.GetAsync(c.Id, CancellationToken.None))!.ContextWindow);
+
+        await _store.UpdateAsync(c.Id, "Ollama", BackendKind.Ollama, "http://o:11434", null, null, 0, CancellationToken.None);
+        Assert.Null((await _store.GetAsync(c.Id, CancellationToken.None))!.ContextWindow); // non-positive clears it
     }
 
     [Fact]
     public async Task RejectsBadInput()
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => _store.CreateAsync("", BackendKind.Ollama, "http://x/", null, null, CancellationToken.None));
-        await Assert.ThrowsAsync<ArgumentException>(() => _store.CreateAsync("n", BackendKind.Ollama, "not a url", null, null, CancellationToken.None));
-        await Assert.ThrowsAsync<ArgumentException>(() => _store.CreateAsync("n", BackendKind.Ollama, "ftp://x/", null, null, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.CreateAsync("", BackendKind.Ollama, "http://x/", null, null, null, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.CreateAsync("n", BackendKind.Ollama, "not a url", null, null, null, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.CreateAsync("n", BackendKind.Ollama, "ftp://x/", null, null, null, CancellationToken.None));
     }
 
     public void Dispose()

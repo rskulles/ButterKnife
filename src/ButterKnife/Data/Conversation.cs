@@ -10,6 +10,10 @@ public sealed record Conversation(
     Guid ConnectionId,
     string Model,
     Guid? PersonaId,
+    string? Summary,
+    int? SummaryThrough,
+    int? ContextTokens,
+    int? ContextWindow,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     IReadOnlyList<ChatMessage> Messages);

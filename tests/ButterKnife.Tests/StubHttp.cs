@@ -24,6 +24,18 @@ internal sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, Ta
             Content = new StringContent(body, Encoding.UTF8, mediaType),
         }));
 
+    /// <summary>Routes by "METHOD /path" (path only, no host). Unmatched requests get 404.</summary>
+    public static StubHandler Route(IReadOnlyDictionary<string, (string Body, string MediaType)> routes) =>
+        new((request, _) =>
+        {
+            var key = $"{request.Method} {request.RequestUri!.AbsolutePath}";
+            if (!routes.TryGetValue(key, out var route))
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("{}", Encoding.UTF8, "application/json") });
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(route.Body, Encoding.UTF8, route.MediaType) });
+        });
+
     /// <summary>Streams the given prefix and then blocks until the request is cancelled.</summary>
     public static StubHandler NeverEnding(string prefix)
     {

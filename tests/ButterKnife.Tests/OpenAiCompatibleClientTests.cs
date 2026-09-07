@@ -30,7 +30,7 @@ public class OpenAiCompatibleClientTests
         var factory = new StubClientFactory(handler, "http://lmstudio.test:1234/v1");
         var client = new OpenAiCompatibleClient(factory, TestConnections.Make("LM Studio", BackendKind.OpenAiCompatible, "http://lmstudio.test:1234/v1"));
 
-        var tokens = await client.StreamChatAsync("m", Messages, CancellationToken.None).ToListAsync();
+        var tokens = await client.StreamChatAsync("m", Messages, CancellationToken.None).ToTextListAsync();
 
         Assert.Equal(["Hel", "lo"], tokens);
         Assert.Equal("http://lmstudio.test:1234/v1/chat/completions", handler.LastRequest!.RequestUri!.ToString());
@@ -49,7 +49,7 @@ public class OpenAiCompatibleClientTests
 
         await client.StreamChatAsync("m",
             [new(ChatRole.User, "describe", [new ChatImage("image/jpeg", jpeg)]), new(ChatRole.Assistant, "a cat")],
-            CancellationToken.None).ToListAsync();
+            CancellationToken.None).ToTextListAsync();
 
         using var body = JsonDocument.Parse(handler.LastRequestBody!);
         var messages = body.RootElement.GetProperty("messages");
@@ -69,7 +69,7 @@ public class OpenAiCompatibleClientTests
         var client = new OpenAiCompatibleClient(new StubClientFactory(handler, "http://x.test/v1"), TestConnections.Make("X", BackendKind.OpenAiCompatible, "http://x.test/v1"));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => client.StreamChatAsync("m", Messages, CancellationToken.None).ToListAsync().AsTask());
+            () => client.StreamChatAsync("m", Messages, CancellationToken.None).ToTextListAsync());
 
         Assert.Contains("context length exceeded", ex.Message);
     }
@@ -81,7 +81,7 @@ public class OpenAiCompatibleClientTests
         var client = new OpenAiCompatibleClient(new StubClientFactory(handler, "http://x.test/v1"), TestConnections.Make("X", BackendKind.OpenAiCompatible, "http://x.test/v1"));
 
         var ex = await Assert.ThrowsAsync<LlmException>(
-            () => client.StreamChatAsync("m", Messages, CancellationToken.None).ToListAsync().AsTask());
+            () => client.StreamChatAsync("m", Messages, CancellationToken.None).ToTextListAsync());
 
         Assert.Equal(HttpStatusCode.NotFound, ex.StatusCode);
     }

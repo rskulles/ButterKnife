@@ -15,7 +15,7 @@ public sealed class ConnectionSeeder(IConnectionStore store, IOptions<LlmOptions
 
         foreach (var backend in options.Value.Backends)
         {
-            await store.CreateAsync(backend.Name, backend.Kind, backend.BaseUrl, backend.ApiKey, backend.DefaultModel, cancellationToken);
+            await store.CreateAsync(backend.Name, backend.Kind, backend.BaseUrl, backend.ApiKey, backend.DefaultModel, backend.ContextWindow, cancellationToken);
             logger.LogInformation("Seeded LLM connection {Name} ({Kind}) at {BaseUrl}", backend.Name, backend.Kind, backend.BaseUrl);
         }
     }

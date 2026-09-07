@@ -11,11 +11,14 @@ public interface ILlmClient
 
     string? DefaultModel { get; }
 
-    /// <summary>Streams assistant token deltas. Honour <paramref name="cancellationToken"/> on every await.</summary>
-    IAsyncEnumerable<string> StreamChatAsync(
+    /// <summary>Streams text deltas and, when the backend reports it, a final usage item. Honour <paramref name="cancellationToken"/> on every await.</summary>
+    IAsyncEnumerable<ChatDelta> StreamChatAsync(
         string model,
         IReadOnlyList<ChatMessage> messages,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>The model's context window in tokens, or null when the backend cannot tell us. Never throws for "unknown".</summary>
+    Task<int?> GetContextWindowAsync(string model, CancellationToken cancellationToken = default);
 }

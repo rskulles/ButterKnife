@@ -167,6 +167,24 @@ public sealed class SqliteConversationStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task RoundTripsSummaryAndContextUsage()
+    {
+        var conv = await _store.CreateAsync("t", ConnA, "m", null, CancellationToken.None);
+        Assert.Null((await _store.GetAsync(conv.Id, CancellationToken.None))!.Summary);
+
+        await _store.SetSummaryAsync(conv.Id, "The user asked about X.", 6, CancellationToken.None);
+        await _store.SetContextUsageAsync(conv.Id, 3200, 32768, CancellationToken.None);
+
+        var loaded = await _store.GetAsync(conv.Id, CancellationToken.None);
+        Assert.Equal(("The user asked about X.", 6, 3200, 32768), (loaded!.Summary, loaded.SummaryThrough, loaded.ContextTokens, loaded.ContextWindow));
+
+        await _store.SetSummaryAsync(conv.Id, null, null, CancellationToken.None);
+        loaded = await _store.GetAsync(conv.Id, CancellationToken.None);
+        Assert.Null(loaded!.Summary);
+        Assert.Null(loaded.SummaryThrough);
+    }
+
+    [Fact]
     public async Task GetMissingReturnsNull()
     {
         Assert.Null(await _store.GetAsync(Guid.NewGuid(), CancellationToken.None));

@@ -23,7 +23,7 @@
             <div class="table-responsive">
                 <table class="table table-sm align-middle">
                     <thead>
-                        <tr><th>Name</th><th>Kind</th><th>Base URL</th><th>Default model</th><th></th></tr>
+                        <tr><th>Name</th><th>Kind</th><th>Base URL</th><th>Default model</th><th>Context</th><th></th></tr>
                     </thead>
                     <tbody>
                         @foreach (var c in _connections)
@@ -39,6 +39,7 @@
                                 <td>@KindLabel(c.Kind)</td>
                                 <td class="text-break"><code>@c.BaseUrl</code></td>
                                 <td>@(c.DefaultModel ?? "—")</td>
+                                <td>@(c.ContextWindow is { } ctx ? $"{ctx:N0}" : "auto")</td>
                                 <td class="text-nowrap text-end">
                                     <button class="btn btn-sm btn-outline-secondary" @onclick="() => TestSavedAsync(c)" disabled="@_busy">Test</button>
                                     <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(c)" disabled="@_busy">Edit</button>
@@ -48,7 +49,7 @@
                             @if (_testResults.TryGetValue(c.Id, out var result))
                             {
                                 <tr>
-                                    <td colspan="5" class="small @(result.Ok ? "text-success" : "text-danger")">@result.Message</td>
+                                    <td colspan="6" class="small @(result.Ok ? "text-success" : "text-danger")">@result.Message</td>
                                 </tr>
                             }
                         }
@@ -112,6 +113,12 @@
                                 <label class="form-check-label small" for="c-clear-key">Remove the stored API key</label>
                             </div>
                         }
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small mb-0" for="c-ctx">Context window <span class="text-muted">(tokens, optional)</span></label>
+                        <InputNumber id="c-ctx" class="form-control form-control-sm" @bind-Value="_form.ContextWindow" placeholder="e.g. 32768" />
+                        <div class="form-text">Overrides what the server reports, for the context meter. For Ollama it is also sent as num_ctx on every request.</div>
                     </div>
 
                     <div class="mb-3">
@@ -195,6 +202,7 @@
             BaseUrl = c.BaseUrl,
             ApiKey = "",
             DefaultModel = c.DefaultModel ?? "",
+            ContextWindow = c.ContextWindow,
         };
         _presetHint = null;
         _formMessage = null;
@@ -220,11 +228,11 @@
             var apiKey = await ResolveApiKeyAsync();
             if (_editingId is { } id)
             {
-                await Store.UpdateAsync(id, _form.Name, _form.Kind, _form.BaseUrl, apiKey, _form.DefaultModel);
+                await Store.UpdateAsync(id, _form.Name, _form.Kind, _form.BaseUrl, apiKey, _form.DefaultModel, _form.ContextWindow);
             }
             else
             {
-                await Store.CreateAsync(_form.Name, _form.Kind, _form.BaseUrl, apiKey, _form.DefaultModel);
+                await Store.CreateAsync(_form.Name, _form.Kind, _form.BaseUrl, apiKey, _form.DefaultModel, _form.ContextWindow);
             }
 
             Events.NotifyChanged();
@@ -313,6 +321,7 @@
                 _form.BaseUrl,
                 apiKey,
                 null,
+                _form.ContextWindow,
                 DateTimeOffset.UtcNow,
                 DateTimeOffset.UtcNow);
 
@@ -388,5 +397,8 @@
         public bool ClearApiKey { get; set; }
 
         public string DefaultModel { get; set; } = "";
+
+        [Range(1, int.MaxValue, ErrorMessage = "Context window must be a positive number of tokens.")]
+        public int? ContextWindow { get; set; }
     }
 }

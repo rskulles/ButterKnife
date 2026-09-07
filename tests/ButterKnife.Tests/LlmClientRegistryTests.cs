@@ -79,14 +79,14 @@ public class LlmClientRegistryTests
         public Task<LlmConnection?> GetAsync(Guid id, CancellationToken cancellationToken = default) =>
             Task.FromResult(_items.FirstOrDefault(c => c.Id == id));
 
-        public Task<LlmConnection> CreateAsync(string name, BackendKind kind, string baseUrl, string? apiKey, string? defaultModel, CancellationToken cancellationToken = default)
+        public Task<LlmConnection> CreateAsync(string name, BackendKind kind, string baseUrl, string? apiKey, string? defaultModel, int? contextWindow, CancellationToken cancellationToken = default)
         {
-            var c = TestConnections.Make(name, kind, baseUrl, defaultModel, apiKey);
+            var c = TestConnections.Make(name, kind, baseUrl, defaultModel, apiKey, contextWindow);
             _items.Add(c);
             return Task.FromResult(c);
         }
 
-        public Task UpdateAsync(Guid id, string name, BackendKind kind, string baseUrl, string? apiKey, string? defaultModel, CancellationToken cancellationToken = default) =>
+        public Task UpdateAsync(Guid id, string name, BackendKind kind, string baseUrl, string? apiKey, string? defaultModel, int? contextWindow, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)

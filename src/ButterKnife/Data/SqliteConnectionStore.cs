@@ -8,7 +8,7 @@ namespace ButterKnife.Data;
 /// <summary>API keys are encrypted with ASP.NET Core Data Protection before they touch the database.</summary>
 public sealed class SqliteConnectionStore : IConnectionStore
 {
-    private const string Columns = "id, name, kind, base_url, api_key, default_model, created_at, updated_at";
+    private const string Columns = "id, name, kind, base_url, api_key, default_model, context_window, created_at, updated_at";
 
     private readonly SqliteDatabase _db;
     private readonly IDataProtector _protector;
@@ -47,7 +47,7 @@ public sealed class SqliteConnectionStore : IConnectionStore
         return await reader.ReadAsync(cancellationToken) ? Read(reader) : null;
     }
 
-    public async Task<LlmConnection> CreateAsync(string name, BackendKind kind, string baseUrl, string? apiKey, string? defaultModel, CancellationToken cancellationToken = default)
+    public async Task<LlmConnection> CreateAsync(string name, BackendKind kind, string baseUrl, string? apiKey, string? defaultModel, int? contextWindow, CancellationToken cancellationToken = default)
     {
         Validate(name, baseUrl);
         var id = Guid.NewGuid();
@@ -56,18 +56,18 @@ public sealed class SqliteConnectionStore : IConnectionStore
         await using var connection = await _db.OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO connections (id, name, kind, base_url, api_key, default_model, created_at, updated_at)
-            VALUES ($id, $name, $kind, $url, $key, $model, $now, $now);
+            INSERT INTO connections (id, name, kind, base_url, api_key, default_model, context_window, created_at, updated_at)
+            VALUES ($id, $name, $kind, $url, $key, $model, $ctx, $now, $now);
             """;
         cmd.Parameters.AddWithValue("$id", id.ToString("D"));
-        AddFields(cmd, name, kind, baseUrl, apiKey, defaultModel);
+        AddFields(cmd, name, kind, baseUrl, apiKey, defaultModel, contextWindow);
         cmd.Parameters.AddWithValue("$now", SqliteDatabase.Format(now));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
 
-        return new LlmConnection(id, name.Trim(), kind, baseUrl.Trim(), Clean(apiKey), Clean(defaultModel), now, now);
+        return new LlmConnection(id, name.Trim(), kind, baseUrl.Trim(), Clean(apiKey), Clean(defaultModel), Positive(contextWindow), now, now);
     }
 
-    public async Task UpdateAsync(Guid id, string name, BackendKind kind, string baseUrl, string? apiKey, string? defaultModel, CancellationToken cancellationToken = default)
+    public async Task UpdateAsync(Guid id, string name, BackendKind kind, string baseUrl, string? apiKey, string? defaultModel, int? contextWindow, CancellationToken cancellationToken = default)
     {
         Validate(name, baseUrl);
 
@@ -75,11 +75,11 @@ public sealed class SqliteConnectionStore : IConnectionStore
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             UPDATE connections
-            SET name = $name, kind = $kind, base_url = $url, api_key = $key, default_model = $model, updated_at = $now
+            SET name = $name, kind = $kind, base_url = $url, api_key = $key, default_model = $model, context_window = $ctx, updated_at = $now
             WHERE id = $id;
             """;
         cmd.Parameters.AddWithValue("$id", id.ToString("D"));
-        AddFields(cmd, name, kind, baseUrl, apiKey, defaultModel);
+        AddFields(cmd, name, kind, baseUrl, apiKey, defaultModel, contextWindow);
         cmd.Parameters.AddWithValue("$now", SqliteDatabase.Format(DateTimeOffset.UtcNow));
 
         if (await cmd.ExecuteNonQueryAsync(cancellationToken) == 0)
@@ -97,8 +97,9 @@ public sealed class SqliteConnectionStore : IConnectionStore
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private void AddFields(SqliteCommand cmd, string name, BackendKind kind, string baseUrl, string? apiKey, string? defaultModel)
+    private void AddFields(SqliteCommand cmd, string name, BackendKind kind, string baseUrl, string? apiKey, string? defaultModel, int? contextWindow)
     {
+        cmd.Parameters.AddWithValue("$ctx", (object?)Positive(contextWindow) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$name", name.Trim());
         cmd.Parameters.AddWithValue("$kind", kind.ToString());
         cmd.Parameters.AddWithValue("$url", baseUrl.Trim());
@@ -130,9 +131,12 @@ public sealed class SqliteConnectionStore : IConnectionStore
             reader.GetString(3),
             apiKey,
             reader.IsDBNull(5) ? null : reader.GetString(5),
-            SqliteDatabase.Parse(reader.GetString(6)),
-            SqliteDatabase.Parse(reader.GetString(7)));
+            reader.IsDBNull(6) ? null : (int)reader.GetInt64(6),
+            SqliteDatabase.Parse(reader.GetString(7)),
+            SqliteDatabase.Parse(reader.GetString(8)));
     }
+
+    private static int? Positive(int? value) => value is > 0 ? value : null;
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 

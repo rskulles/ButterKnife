@@ -19,5 +19,11 @@ public interface IConversationStore
     /// <summary>Null clears the persona. The persona's prompt is looked up at request time, so edits apply to later turns.</summary>
     Task SetPersonaAsync(Guid conversationId, Guid? personaId, CancellationToken cancellationToken = default);
 
+    /// <summary>Compaction checkpoint: <paramref name="summary"/> covers the first <paramref name="summaryThrough"/> messages. Null clears it.</summary>
+    Task SetSummaryAsync(Guid conversationId, string? summary, int? summaryThrough, CancellationToken cancellationToken = default);
+
+    /// <summary>Last reported context usage and the model's window, for the context meter.</summary>
+    Task SetContextUsageAsync(Guid conversationId, int? contextTokens, int? contextWindow, CancellationToken cancellationToken = default);
+
     Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
 }

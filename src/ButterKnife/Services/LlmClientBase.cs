@@ -26,12 +26,49 @@ public abstract class LlmClientBase(IHttpClientFactory httpClientFactory, LlmCon
 
     public string? DefaultModel => Connection.DefaultModel;
 
-    public abstract IAsyncEnumerable<string> StreamChatAsync(
+    public abstract IAsyncEnumerable<ChatDelta> StreamChatAsync(
         string model,
         IReadOnlyList<ChatMessage> messages,
         CancellationToken cancellationToken = default);
 
     public abstract Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken = default);
+
+    public abstract Task<int?> GetContextWindowAsync(string model, CancellationToken cancellationToken = default);
+
+    /// <summary>GET that returns null instead of throwing, for optional capability lookups.</summary>
+    protected async Task<T?> TryGetJsonAsync<T>(string relativeUrl, CancellationToken cancellationToken) where T : class
+    {
+        try
+        {
+            return await GetJsonAsync<T>(relativeUrl, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    protected async Task<T?> TryPostJsonAsync<T, TBody>(string relativeUrl, TBody body, CancellationToken cancellationToken) where T : class
+    {
+        try
+        {
+            using var response = await PostStreamingAsync(relativeUrl, body, cancellationToken);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
 
     /// <summary>Relative request paths ("api/chat") resolve against BaseUrl; the base always ends with "/" so its last segment is kept.</summary>
     protected Uri Resolve(string relativeUrl)

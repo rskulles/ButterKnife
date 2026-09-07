@@ -41,7 +41,7 @@ public class AnthropicLlmClientTests
 
         var tokens = await client.StreamChatAsync("claude-opus-5",
             [new(ChatRole.System, "Be terse."), new(ChatRole.User, "hi"), new(ChatRole.Assistant, "hey"), new(ChatRole.User, "again")],
-            CancellationToken.None).ToListAsync();
+            CancellationToken.None).ToTextListAsync();
 
         Assert.Equal(["Hel", "lo"], tokens);
         Assert.Equal("http://anthropic.test/v1/messages", handler.LastRequest!.RequestUri!.ToString());
@@ -69,7 +69,7 @@ public class AnthropicLlmClientTests
 
         await client.StreamChatAsync("claude-opus-5",
             [new(ChatRole.User, "what's here?", [new ChatImage("image/webp", webp)])],
-            CancellationToken.None).ToListAsync();
+            CancellationToken.None).ToTextListAsync();
 
         using var body = JsonDocument.Parse(handler.LastRequestBody!);
         var content = body.RootElement.GetProperty("messages")[0].GetProperty("content");

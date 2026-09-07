@@ -24,7 +24,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         cmd.Parameters.AddWithValue("$now", SqliteDatabase.Format(now));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
 
-        return new Conversation(id, title, connectionId, model, personaId, now, now, []);
+        return new Conversation(id, title, connectionId, model, personaId, null, null, null, null, now, now, []);
     }
 
     public async Task<Conversation?> GetAsync(Guid id, CancellationToken cancellationToken = default)
@@ -32,7 +32,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         await using var connection = await db.OpenAsync(cancellationToken);
 
         await using var head = connection.CreateCommand();
-        head.CommandText = "SELECT title, backend, model, persona_id, created_at, updated_at FROM conversations WHERE id = $id;";
+        head.CommandText = "SELECT title, backend, model, persona_id, summary, summary_through, context_tokens, context_window, created_at, updated_at FROM conversations WHERE id = $id;";
         head.Parameters.AddWithValue("$id", id.ToString("D"));
 
         await using var reader = await head.ExecuteReaderAsync(cancellationToken);
@@ -46,11 +46,15 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         var connectionId = Guid.TryParse(reader.GetString(1), out var parsed) ? parsed : Guid.Empty;
         var model = reader.GetString(2);
         Guid? personaId = reader.IsDBNull(3) ? null : Guid.Parse(reader.GetString(3));
-        var createdAt = SqliteDatabase.Parse(reader.GetString(4));
-        var updatedAt = SqliteDatabase.Parse(reader.GetString(5));
+        var summary = reader.IsDBNull(4) ? null : reader.GetString(4);
+        int? summaryThrough = reader.IsDBNull(5) ? null : (int)reader.GetInt64(5);
+        int? contextTokens = reader.IsDBNull(6) ? null : (int)reader.GetInt64(6);
+        int? contextWindow = reader.IsDBNull(7) ? null : (int)reader.GetInt64(7);
+        var createdAt = SqliteDatabase.Parse(reader.GetString(8));
+        var updatedAt = SqliteDatabase.Parse(reader.GetString(9));
 
         var messages = await LoadMessagesAsync(connection, id, cancellationToken);
-        return new Conversation(id, title, connectionId, model, personaId, createdAt, updatedAt, messages);
+        return new Conversation(id, title, connectionId, model, personaId, summary, summaryThrough, contextTokens, contextWindow, createdAt, updatedAt, messages);
     }
 
     public async Task<IReadOnlyList<ConversationSummary>> ListAsync(CancellationToken cancellationToken = default)
@@ -137,6 +141,28 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         cmd.CommandText = "UPDATE conversations SET persona_id = $persona WHERE id = $id;";
         cmd.Parameters.AddWithValue("$id", conversationId.ToString("D"));
         cmd.Parameters.AddWithValue("$persona", (object?)personaId?.ToString("D") ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task SetSummaryAsync(Guid conversationId, string? summary, int? summaryThrough, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await db.OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE conversations SET summary = $summary, summary_through = $through WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$id", conversationId.ToString("D"));
+        cmd.Parameters.AddWithValue("$summary", (object?)summary ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$through", (object?)summaryThrough ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task SetContextUsageAsync(Guid conversationId, int? contextTokens, int? contextWindow, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await db.OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE conversations SET context_tokens = $tokens, context_window = $window WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$id", conversationId.ToString("D"));
+        cmd.Parameters.AddWithValue("$tokens", (object?)contextTokens ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$window", (object?)contextWindow ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 

@@ -20,6 +20,7 @@ public static class LlmServiceCollectionExtensions
         services.AddSingleton<ILlmClientRegistry, LlmClientRegistry>();
         services.AddSingleton<ModelCatalog>();
         services.AddSingleton<MarkdownRenderer>();
+        services.AddSingleton<ConversationCompactor>();
         services.AddHostedService<ConnectionSeeder>();
 
         return services;

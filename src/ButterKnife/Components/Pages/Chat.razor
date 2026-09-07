@@ -16,6 +16,7 @@
 @inject ConnectionEvents ConnectionEvents
 @inject NavigationManager Nav
 @inject IOptions<LlmOptions> LlmOptions
+@inject ConversationCompactor Compactor
 
 <PageTitle>@(_title is null ? "ButterKnife" : $"{_title} · ButterKnife")</PageTitle>
 
@@ -65,6 +66,32 @@
         </div>
     }
 
+    @if (Selected is not null || _turns.Count > 0)
+    {
+        var (used, exact) = CurrentContext();
+        var percent = _contextWindow is { } window && window > 0 ? Math.Min(100, used * 100.0 / window) : (double?)null;
+        <div class="context-meter" title="@ContextTooltip(used, exact)">
+            <div class="context-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="@(percent is { } p ? (int)p : 0)">
+                <div class="context-fill @(percent >= 90 ? "context-danger" : percent >= 70 ? "context-warn" : "")" style="width: @((percent ?? 0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+            </div>
+            <span class="context-text">
+                context @(exact ? "" : "~")@FormatTokens(used) / @(_contextWindow is { } w ? FormatTokens(w) : "?")
+                @if (percent is { } pc)
+                {
+                    <span class="text-muted">&nbsp;· @pc.ToString("0")%</span>
+                }
+            </span>
+            <button class="btn btn-sm btn-outline-secondary btn-compact" @onclick="CompactAsync" disabled="@(!CanCompact)"
+                    title="Summarise the older turns so the conversation takes less context. The transcript stays as it is.">
+                @(_compacting ? "Compacting…" : "Compact")
+            </button>
+            @if (_compacting)
+            {
+                <button class="btn btn-sm btn-link p-0" @onclick="CancelCompaction">Cancel</button>
+            }
+        </div>
+    }
+
     @foreach (var (backend, message) in _backendErrors)
     {
         <div class="alert alert-warning py-1 px-2 small mb-1" role="alert">
@@ -84,8 +111,21 @@
                 <p class="chat-empty text-muted">Pick a model and say something.</p>
             }
         }
-        @foreach (var turn in _turns)
+        @for (var i = 0; i < _turns.Count; i++)
         {
+            var turn = _turns[i];
+            @if (_summaryThrough > 0 && i == _summaryThrough)
+            {
+                <div class="compact-divider">
+                    <button type="button" class="btn btn-link btn-sm p-0 compact-toggle" @onclick="() => _showSummary = !_showSummary">
+                        @_summaryThrough earlier message@(_summaryThrough == 1 ? "" : "s") compacted into a summary — @(_showSummary ? "hide" : "show")
+                    </button>
+                    @if (_showSummary && _summary is not null)
+                    {
+                        <div class="compact-summary msg-markdown">@((MarkupString)Markdown.ToHtml(_summary))</div>
+                    }
+                </div>
+            }
             <div class="msg msg-@turn.Role.ToString().ToLowerInvariant()">
                 <div class="msg-role">@turn.Role</div>
                 @if (turn.Role == ChatRole.Assistant)
@@ -93,11 +133,11 @@
                     <div class="msg-content msg-markdown">@turn.Html@(turn.IsStreaming ? "▍" : "")</div>
                     @if (turn.IsStreaming)
                     {
-                        <ButterKnifeThrobber Stats="() => (turn.Elapsed, turn.Chunks)" />
+                        <ButterKnifeThrobber Stats="turn.GetStats" />
                     }
                     else if (turn.Chunks > 0)
                     {
-                        <div class="msg-stats" title="Token count is approximate: it counts streamed chunks">@ButterKnifeThrobber.FormatStats(turn.Elapsed, turn.Chunks)</div>
+                        <div class="msg-stats" title="@ButterKnifeThrobber.StatsTooltip">@ButterKnifeThrobber.FormatStats(turn.GetStats())</div>
                     }
                 }
                 else
@@ -200,6 +240,17 @@
     private readonly List<ChatImage> _pendingImages = [];
     private readonly HashSet<ChatImage> _expandedImages = [];
     private string? _imageError;
+
+    // Context meter + compaction (see ConversationCompactor). _contextTokens is exact from the last reply, else estimated.
+    private string? _summary;
+    private int _summaryThrough;
+    private int? _contextTokens;
+    private int? _contextWindow;
+    private bool _compacting;
+    private bool _showSummary;
+    private CancellationTokenSource? _compaction;
+    private readonly Dictionary<string, int?> _windowCache = new(StringComparer.Ordinal);
+
     private IJSObjectReference? _js;
     private DotNetObjectReference<Chat>? _self;
 
@@ -208,6 +259,12 @@
     private ModelDescriptor? Selected => _models.FirstOrDefault(m => m.Key == _selectedKey);
 
     private Persona? SelectedPersona => _personas.FirstOrDefault(p => p.Id.ToString() == _personaKey);
+
+    private int KeepRecentTurns => Math.Max(1, LlmOptions.Value.CompactKeepRecentTurns);
+
+    private bool CanCompact =>
+        !_isStreaming && !_compacting && Selected is not null && _conversationId is not null &&
+        _turns.Count - _summaryThrough > KeepRecentTurns + 1;
 
     protected override async Task OnInitializedAsync()
     {
@@ -259,9 +316,16 @@
         _conversationId = Id;
         _title = null;
         _personaKey = DefaultPersonaKey();
+        _compaction?.Cancel();
+        _summary = null;
+        _summaryThrough = 0;
+        _contextTokens = null;
+        _contextWindow = null;
+        _showSummary = false;
 
         if (Id is not { } id)
         {
+            _ = RefreshContextWindowAsync();
             return;
         }
 
@@ -275,6 +339,10 @@
 
         _title = conversation.Title;
         _personaKey = conversation.PersonaId?.ToString() ?? "";
+        _summary = conversation.Summary;
+        _summaryThrough = Math.Min(conversation.SummaryThrough ?? 0, conversation.Messages.Count);
+        _contextTokens = conversation.ContextTokens;
+        _contextWindow = conversation.ContextWindow;
         foreach (var message in conversation.Messages)
         {
             _turns.Add(new Turn(message.Role, message.Content, Markdown, message.Images));
@@ -289,6 +357,8 @@
         {
             _error = $"Model {conversation.Model} is no longer available on its connection; pick another to continue.";
         }
+
+        _ = RefreshContextWindowAsync();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -339,7 +409,11 @@
             StateHasChanged();
         });
 
-    private void OnModelChanged(ChangeEventArgs e) => _selectedKey = e.Value?.ToString() ?? "";
+    private void OnModelChanged(ChangeEventArgs e)
+    {
+        _selectedKey = e.Value?.ToString() ?? "";
+        _ = RefreshContextWindowAsync();
+    }
 
     private void NewChat() => Nav.NavigateTo("/");
 
@@ -362,6 +436,7 @@
         _pendingImages.Clear();
         _imageError = null;
         _error = null;
+        _contextTokens = null; // exact again once the backend reports usage for this request
 
         Guid conversationId;
         try
@@ -382,12 +457,7 @@
         }
 
         _turns.Add(new Turn(ChatRole.User, prompt, Markdown, images));
-        var history = new List<ChatMessage>();
-        if (SelectedPersona is { } activePersona)
-        {
-            history.Add(new ChatMessage(ChatRole.System, activePersona.SystemPrompt));
-        }
-        history.AddRange(_turns.Select(t => new ChatMessage(t.Role, t.Text, t.Images)));
+        var history = BuildHistory();
 
         var reply = new Turn(ChatRole.Assistant, "", Markdown) { IsStreaming = true };
         _turns.Add(reply);
@@ -399,6 +469,7 @@
         await RenderAndScrollAsync();
 
         string? completedText = null;
+        TokenUsage? usage = null;
         try
         {
             var client = await Registry.GetAsync(model.ConnectionId, token);
@@ -406,7 +477,16 @@
 
             await foreach (var delta in client.StreamChatAsync(model.Model, history, token))
             {
-                reply.Append(delta);
+                if (delta.Usage is not null)
+                {
+                    usage = delta.Usage;
+                    reply.Usage = usage;
+                }
+                if (delta.Text is not { } text)
+                {
+                    continue;
+                }
+                reply.Append(text);
 
                 if (Stopwatch.GetElapsedTime(lastRender) >= RenderInterval)
                 {
@@ -416,6 +496,11 @@
             }
 
             completedText = reply.Text;
+            if (usage?.PromptTokens is { } promptTokens)
+            {
+                // What the next request will roughly start from: this prompt plus the reply we just got.
+                _contextTokens = promptTokens + (usage.CompletionTokens ?? reply.Chunks);
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -449,7 +534,159 @@
         {
             await _js.InvokeVoidAsync("focus", _inputElement);
         }
+
+        await AfterReplyContextAsync(conversationId, model);
     }
+
+    /// <summary>Request history as sent on the wire: persona + running summary as the system prompt, then the turns after the checkpoint.</summary>
+    private List<ChatMessage> BuildHistory()
+    {
+        var history = new List<ChatMessage>();
+        if (ConversationCompactor.ComposeSystemPrompt(SelectedPersona?.SystemPrompt, _summary) is { } system)
+        {
+            history.Add(new ChatMessage(ChatRole.System, system));
+        }
+        history.AddRange(_turns.Skip(_summaryThrough).Select(t => new ChatMessage(t.Role, t.Text, t.Images)));
+        return history;
+    }
+
+    /// <summary>Tokens the next request would carry: exact (from the last reply) plus whatever is being typed, else an estimate.</summary>
+    private (int Tokens, bool Exact) CurrentContext()
+    {
+        var pending = TokenEstimator.Estimate(_input) + _pendingImages.Count * TokenEstimator.TokensPerImage;
+        if (_contextTokens is { } exact)
+        {
+            return (exact + pending, pending == 0);
+        }
+        return (TokenEstimator.Estimate(BuildHistory()) + pending, false);
+    }
+
+    private string ContextTooltip(int used, bool exact) =>
+        (exact ? "Exact, as reported by the backend after the last reply." : "Estimated (~4 characters per token, ~1000 per image); exact after the next reply.")
+        + (_contextWindow is null ? " The model's context window is unknown; set it on the connection to see a percentage." : "")
+        + (_summary is not null ? $" {_summaryThrough} older messages are compacted into a summary." : "");
+
+    private static string FormatTokens(int tokens) => tokens switch
+    {
+        >= 1_000_000 => $"{tokens / 1_000_000.0:0.#}M",
+        >= 10_000 => $"{tokens / 1000.0:0}k",
+        >= 1_000 => $"{tokens / 1000.0:0.#}k",
+        _ => tokens.ToString(),
+    };
+
+    private async Task RefreshContextWindowAsync()
+    {
+        if (Selected is not { } model)
+        {
+            _contextWindow = null;
+            return;
+        }
+
+        if (_windowCache.TryGetValue(model.Key, out var cached))
+        {
+            _contextWindow = cached;
+            return;
+        }
+
+        try
+        {
+            var client = await Registry.GetAsync(model.ConnectionId, _disposed.Token);
+            var window = await client.GetContextWindowAsync(model.Model, _disposed.Token);
+            _windowCache[model.Key] = window;
+            if (Selected?.Key == model.Key)
+            {
+                _contextWindow = window;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            // Unknown window is a valid state; the meter shows "?".
+        }
+    }
+
+    /// <summary>After a reply: make sure the window is known, persist the meter values, and auto-compact if over the threshold.</summary>
+    private async Task AfterReplyContextAsync(Guid conversationId, ModelDescriptor model)
+    {
+        if (_contextWindow is null)
+        {
+            await RefreshContextWindowAsync();
+        }
+
+        try
+        {
+            await Store.SetContextUsageAsync(conversationId, _contextTokens, _contextWindow, CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            // Meter values are advisory; never block the chat on them.
+        }
+
+        var threshold = LlmOptions.Value.AutoCompactThreshold;
+        if (threshold > 0 && _contextWindow is { } window && window > 0 && _contextTokens is { } used
+            && used >= window * threshold && CanCompact)
+        {
+            await CompactAsync();
+            await RenderAndScrollAsync();
+        }
+    }
+
+    /// <summary>Summarises everything older than the last few turns and stores it as the checkpoint. The transcript is untouched.</summary>
+    private async Task CompactAsync()
+    {
+        if (!CanCompact || Selected is not { } model || _conversationId is not { } conversationId)
+        {
+            return;
+        }
+
+        var through = _turns.Count - KeepRecentTurns;
+        if (through <= _summaryThrough)
+        {
+            return;
+        }
+
+        var older = _turns.Skip(_summaryThrough).Take(through - _summaryThrough)
+            .Select(t => new ChatMessage(t.Role, t.Text, t.Images)).ToList();
+
+        _compacting = true;
+        _error = null;
+        _compaction = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
+        var token = _compaction.Token;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var client = await Registry.GetAsync(model.ConnectionId, token);
+            var summary = await Compactor.SummarizeAsync(client, model.Model, _summary, older, token);
+            await Store.SetSummaryAsync(conversationId, summary, through, CancellationToken.None);
+            _summary = summary;
+            _summaryThrough = through;
+            _contextTokens = null; // the exact count described the uncompacted history
+            await Store.SetContextUsageAsync(conversationId, null, _contextWindow, CancellationToken.None);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            if (!_disposed.IsCancellationRequested)
+            {
+                _error = "Compaction cancelled.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Compaction failed: {ex.Message}";
+        }
+        finally
+        {
+            _compacting = false;
+            _compaction?.Dispose();
+            _compaction = null;
+        }
+    }
+
+    private void CancelCompaction() => _compaction?.Cancel();
 
     /// <summary>Creates the conversation on first send and moves the URL to it; keeps the stored model in sync afterwards.</summary>
     private async Task<Guid> EnsureConversationAsync(ModelDescriptor model, string firstPrompt)
@@ -593,6 +830,7 @@
         ConnectionEvents.Changed -= OnConnectionsChanged;
         _disposed.Cancel();
         _generation?.Dispose();
+        _compaction?.Dispose();
         _disposed.Dispose();
         _self?.Dispose();
 
@@ -615,14 +853,24 @@
         private MarkupString? _html;
         private bool _isStreaming;
         private long _startedAt;
+        private long? _firstTokenAt;
         private long? _endedAt;
 
         public ChatRole Role { get; } = role;
         public IReadOnlyList<ChatImage> Images { get; } = images ?? ChatMessage.NoImages;
         public string Text => _text.ToString();
 
-        /// <summary>Streamed chunks; a close stand-in for tokens on every backend we speak to.</summary>
+        /// <summary>Streamed chunks; a close stand-in for tokens until the backend reports real counts.</summary>
         public int Chunks { get; private set; }
+
+        /// <summary>Set when the backend reports usage at the end of the stream.</summary>
+        public TokenUsage? Usage { get; set; }
+
+        public TimeSpan? TimeToFirstToken => _firstTokenAt is { } first && _startedAt != 0
+            ? Stopwatch.GetElapsedTime(_startedAt, first)
+            : null;
+
+        public GenerationStats GetStats() => new(Elapsed, TimeToFirstToken, Chunks, Usage);
 
         public bool IsStreaming
         {
@@ -632,6 +880,7 @@
                 if (value && !_isStreaming)
                 {
                     _startedAt = Stopwatch.GetTimestamp();
+                    _firstTokenAt = null;
                     _endedAt = null;
                 }
                 else if (!value && _isStreaming)
@@ -650,6 +899,7 @@
 
         public void Append(string delta)
         {
+            _firstTokenAt ??= Stopwatch.GetTimestamp();
             _text.Append(delta);
             _html = null;
             Chunks++;

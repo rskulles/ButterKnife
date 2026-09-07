@@ -81,24 +81,29 @@ public sealed class SqliteDatabase
                 );
 
                 CREATE TABLE IF NOT EXISTS connections (
-                    id            TEXT PRIMARY KEY,
-                    name          TEXT NOT NULL,
-                    kind          TEXT NOT NULL,
-                    base_url      TEXT NOT NULL,
-                    api_key       TEXT NULL,
-                    default_model TEXT NULL,
-                    created_at    TEXT NOT NULL,
-                    updated_at    TEXT NOT NULL
+                    id             TEXT PRIMARY KEY,
+                    name           TEXT NOT NULL,
+                    kind           TEXT NOT NULL,
+                    base_url       TEXT NOT NULL,
+                    api_key        TEXT NULL,
+                    default_model  TEXT NULL,
+                    context_window INTEGER NULL,
+                    created_at     TEXT NOT NULL,
+                    updated_at     TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS conversations (
-                    id         TEXT PRIMARY KEY,
-                    title      TEXT NOT NULL,
-                    backend    TEXT NOT NULL, -- connection id (GUID)
-                    model      TEXT NOT NULL,
-                    persona_id TEXT NULL REFERENCES personas(id) ON DELETE SET NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    id              TEXT PRIMARY KEY,
+                    title           TEXT NOT NULL,
+                    backend         TEXT NOT NULL, -- connection id (GUID)
+                    model           TEXT NOT NULL,
+                    persona_id      TEXT NULL REFERENCES personas(id) ON DELETE SET NULL,
+                    summary         TEXT NULL,     -- compaction: summary of the first summary_through messages
+                    summary_through INTEGER NULL,
+                    context_tokens  INTEGER NULL,  -- prompt+completion tokens of the last request, as reported
+                    context_window  INTEGER NULL,  -- window of the model used for the last request, if known
+                    created_at      TEXT NOT NULL,
+                    updated_at      TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS messages (
@@ -121,9 +126,14 @@ public sealed class SqliteDatabase
                 CREATE INDEX IF NOT EXISTS ix_message_images_message ON message_images(message_id);
                 """, cancellationToken);
 
-            // Databases created before personas existed.
+            // Databases created before these columns existed.
             await AddColumnIfMissingAsync(connection, "conversations", "persona_id",
                 "TEXT NULL REFERENCES personas(id) ON DELETE SET NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, "conversations", "summary", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, "conversations", "summary_through", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, "conversations", "context_tokens", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, "conversations", "context_window", "INTEGER NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, "connections", "context_window", "INTEGER NULL", cancellationToken);
 
             await SeedPersonasAsync(connection, cancellationToken);
             _initialized = true;

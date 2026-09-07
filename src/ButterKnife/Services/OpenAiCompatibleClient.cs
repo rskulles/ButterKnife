@@ -15,7 +15,7 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
     private const string DataPrefix = "data:";
     private const string DoneSentinel = "[DONE]";
 
-    public override async IAsyncEnumerable<string> StreamChatAsync(
+    public override async IAsyncEnumerable<ChatDelta> StreamChatAsync(
         string model,
         IReadOnlyList<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -23,7 +23,8 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
         var body = new ChatRequest(
             model,
             messages.Select(m => new WireMessage(RoleName(m.Role), BuildContent(m))).ToArray(),
-            Stream: true);
+            Stream: true,
+            StreamOptions: new StreamOptions(IncludeUsage: true));
 
         var response = await PostStreamingAsync("chat/completions", body, cancellationToken);
 
@@ -54,7 +55,13 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
             var delta = chunk?.Choices is { Length: > 0 } choices ? choices[0].Delta?.Content : null;
             if (!string.IsNullOrEmpty(delta))
             {
-                yield return delta;
+                yield return ChatDelta.FromText(delta);
+            }
+
+            // With stream_options.include_usage the final chunk carries usage (and usually no choices).
+            if (chunk?.Usage is { } usage && (usage.PromptTokens is not null || usage.CompletionTokens is not null))
+            {
+                yield return ChatDelta.FromUsage(new TokenUsage(usage.PromptTokens, usage.CompletionTokens));
             }
         }
     }
@@ -63,6 +70,27 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
     {
         var models = await GetJsonAsync<ModelsResponse>("models", cancellationToken);
         return models.Data.Select(m => m.Id).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    /// <summary>
+    /// The OpenAI chat API has no standard way to report a model's window. LM Studio exposes it on its own REST API
+    /// at the server root (/api/v0/models/{id} → max_context_length); other servers return null unless configured.
+    /// </summary>
+    public override async Task<int?> GetContextWindowAsync(string model, CancellationToken cancellationToken = default)
+    {
+        if (Connection.ContextWindow is { } configured)
+        {
+            return configured;
+        }
+
+        var root = Connection.BaseUrl.TrimEnd('/');
+        if (root.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+        {
+            root = root[..^3];
+        }
+
+        var info = await TryGetJsonAsync<LmStudioModel>($"{root}/api/v0/models/{Uri.EscapeDataString(model)}", cancellationToken);
+        return info?.MaxContextLength is > 0 ? info.MaxContextLength : null;
     }
 
     /// <summary>Plain string when text-only (widest compatibility); otherwise the multimodal parts array.</summary>
@@ -90,7 +118,9 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
         _ => throw new ArgumentOutOfRangeException(nameof(role), role, null),
     };
 
-    private sealed record ChatRequest(string Model, WireMessage[] Messages, bool Stream);
+    private sealed record ChatRequest(string Model, WireMessage[] Messages, bool Stream, [property: JsonPropertyName("stream_options")] StreamOptions? StreamOptions = null);
+
+    private sealed record StreamOptions([property: JsonPropertyName("include_usage")] bool IncludeUsage);
 
     private sealed record WireMessage(string Role, object Content);
 
@@ -106,7 +136,13 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
 
     private sealed record ImageUrl(string Url);
 
-    private sealed record ChatChunk(Choice[]? Choices, ErrorBody? Error);
+    private sealed record ChatChunk(Choice[]? Choices, ErrorBody? Error, Usage? Usage);
+
+    private sealed record Usage(
+        [property: JsonPropertyName("prompt_tokens")] int? PromptTokens,
+        [property: JsonPropertyName("completion_tokens")] int? CompletionTokens);
+
+    private sealed record LmStudioModel([property: JsonPropertyName("max_context_length")] int? MaxContextLength);
 
     private sealed record Choice(Delta? Delta);
 

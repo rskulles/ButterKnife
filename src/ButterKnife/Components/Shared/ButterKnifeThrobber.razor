@@ -31,8 +31,7 @@
 
     @if (Stats is not null)
     {
-        var (elapsed, tokens) = Stats();
-        <span class="knife-stats" title="Token count is approximate: it counts streamed chunks">@FormatStats(elapsed, tokens, live: true)</span>
+        <span class="knife-stats" title="@StatsTooltip">@FormatStats(Stats(), live: true)</span>
     }
 </div>
 
@@ -42,8 +41,13 @@
 
     private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(250);
 
+    public const string StatsTooltip =
+        "first token: time until the first streamed token (prompt processing + queueing). " +
+        "prompt: prompt tokens as reported by the backend, with the backend's own processing rate where it measures it (Ollama), else prompt tokens over time-to-first-token. " +
+        "tok/s: generation rate after the first token. Token counts before the backend reports them are counted chunks.";
+
     /// <summary>Live values; read on every tick so the clock runs even when no tokens arrive.</summary>
-    [Parameter] public Func<(TimeSpan Elapsed, int Tokens)>? Stats { get; set; }
+    [Parameter] public Func<GenerationStats>? Stats { get; set; }
 
     private readonly CancellationTokenSource _stopped = new();
     private bool _spinning;
@@ -90,24 +94,46 @@
         }
     }
 
-    /// <summary>"2.4s · 87 tokens · 36 tok/s"; while live and before the first token, "1.2s · waiting for first token…".</summary>
-    public static string FormatStats(TimeSpan elapsed, int tokens, bool live = false)
+    /// <summary>
+    /// Live: "first token 0.8s · 2.4s · 87 tokens · 36 tok/s" (before the first token: "1.2s · waiting for first token…").
+    /// Final: "first token 0.8s · prompt 1.2k tok @ 850 tok/s · 3.1s · 120 tokens · 39 tok/s".
+    /// </summary>
+    public static string FormatStats(GenerationStats stats, bool live = false)
     {
-        var parts = new List<string> { FormatElapsed(elapsed) };
-        if (tokens > 0)
+        var parts = new List<string>();
+
+        if (stats.TimeToFirstToken is { } ttft)
         {
-            parts.Add($"{tokens} tokens");
-            if (elapsed.TotalSeconds >= 0.5)
+            parts.Add($"first token {(ttft.TotalSeconds < 1 ? $"{ttft.TotalMilliseconds:0}ms" : FormatElapsed(ttft))}");
+        }
+
+        if (stats.PromptTokens is { } prompt && prompt > 0)
+        {
+            parts.Add(stats.PromptTokensPerSecond is { } promptRate
+                ? $"prompt {FormatCount(prompt)} tok @ {promptRate:0} tok/s"
+                : $"prompt {FormatCount(prompt)} tok");
+        }
+
+        parts.Add(FormatElapsed(stats.Elapsed));
+
+        var outputTokens = stats.Usage?.CompletionTokens ?? stats.Chunks;
+        if (outputTokens > 0)
+        {
+            parts.Add($"{outputTokens} tokens");
+            if (stats.GenerationTokensPerSecond is { } rate)
             {
-                parts.Add($"{tokens / elapsed.TotalSeconds:0} tok/s");
+                parts.Add($"{rate:0} tok/s");
             }
         }
         else if (live)
         {
             parts.Add("waiting for first token…");
         }
+
         return string.Join(" · ", parts);
     }
+
+    private static string FormatCount(int n) => n >= 10_000 ? $"{n / 1000.0:0}k" : n >= 1_000 ? $"{n / 1000.0:0.#}k" : n.ToString();
 
     public static string FormatElapsed(TimeSpan elapsed) =>
         elapsed.TotalSeconds < 60
