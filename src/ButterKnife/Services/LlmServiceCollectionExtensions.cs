@@ -13,6 +13,11 @@ public static class LlmServiceCollectionExtensions
             .Validate(o => o.Backends.All(b => Uri.TryCreate(b.BaseUrl, UriKind.Absolute, out _)), "Every Llm backend needs an absolute BaseUrl.")
             .ValidateOnStart();
 
+        services.AddOptions<DictationOptions>()
+            .Bind(configuration.GetSection(DictationOptions.SectionName))
+            .Validate(o => o.SilenceDurationMs >= 300 && o.MaxRecordingSeconds >= 5, "Dictation: SilenceDurationMs must be ≥ 300 and MaxRecordingSeconds ≥ 5.")
+            .ValidateOnStart();
+
         // One shared client for all HTTP-based connections; requests carry absolute URIs and per-connection auth.
         // Generations can run for minutes; cancellation is driven by the caller's token instead of a timeout.
         services.AddHttpClient(LlmClientBase.HttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);

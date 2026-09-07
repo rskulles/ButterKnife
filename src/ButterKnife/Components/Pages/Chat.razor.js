@@ -37,22 +37,145 @@ let recordedChunks = [];
 let recording = null; // { bytes: Uint8Array, mimeType }
 let recognition = null;
 
-export async function startDictation(serverMode) {
+let streamFactory = null;      // test hook: replaces getUserMedia
+let monitor = null;            // { ctx, timer, stop() } for silence detection + level meter
+let stopReason = "manual";
+const monitorState = { ticks: 0, rms: 0, threshold: null, speechHeard: false, quietMs: 0, autoStop: null, lastError: null, phase: "idle" };
+
+// Diagnostics for tests: what the recorder and detector are doing right now.
+export function debugState() {
+    return Object.assign({}, monitorState, {
+        recorderState: recorder?.state ?? null,
+        monitorActive: !!monitor,
+        hasRecording: !!recording,
+        stopReason,
+    });
+}
+
+const PREFS_KEY = "butterknife.dictation";
+
+export function loadDictationPrefs() {
+    try {
+        const raw = localStorage.getItem(PREFS_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+}
+
+export function saveDictationPrefs(prefs) {
+    try {
+        localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    } catch {
+        // private mode etc.; defaults from the server still apply
+    }
+}
+
+async function acquireStream() {
+    if (streamFactory) {
+        return await streamFactory();
+    }
+    return await navigator.mediaDevices.getUserMedia({ audio: true });
+}
+
+// Simple energy-based voice activity detection: sample the noise floor briefly, treat sustained energy
+// well above it as speech, and once speech has been heard stop after `silenceMs` of quiet.
+function startMonitor(stream, micButton, options, onAutoStop) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioCtx();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    const data = new Float32Array(analyser.fftSize);
+
+    const startedAt = performance.now();
+    const floorSamples = [];
+    let threshold = null;
+    let speechHeard = false;
+    let quietSince = null;
+    Object.assign(monitorState, { ticks: 0, rms: 0, threshold: null, speechHeard: false, quietMs: 0, autoStop: options.autoStop, lastError: null, phase: "monitoring" });
+
+    const timer = setInterval(() => {
+      try {
+        analyser.getFloatTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+        const rms = Math.sqrt(sum / data.length);
+        const now = performance.now();
+        monitorState.ticks++;
+        monitorState.rms = rms;
+        monitorState.threshold = threshold;
+        monitorState.speechHeard = speechHeard;
+        monitorState.quietMs = quietSince === null ? 0 : now - quietSince;
+
+        if (micButton) {
+            micButton.style.setProperty("--mic-level", Math.min(1, rms * 8).toFixed(2));
+        }
+
+        if (now - startedAt > options.maxSeconds * 1000) {
+            onAutoStop("max");
+            return;
+        }
+        if (!options.autoStop) {
+            return;
+        }
+
+        if (threshold === null) {
+            floorSamples.push(rms);
+            if (now - startedAt >= 400) {
+                const floor = floorSamples.reduce((a, b) => a + b, 0) / floorSamples.length;
+                threshold = Math.max(floor * 3, 0.012);
+            }
+            return;
+        }
+
+        if (rms > threshold) {
+            speechHeard = true;
+            quietSince = null;
+        } else if (speechHeard) {
+            quietSince ??= now;
+            if (now - quietSince >= options.silenceMs) {
+                clearInterval(timer);
+                onAutoStop("silence");
+            }
+        }
+      } catch (e) {
+        monitorState.lastError = String(e);
+      }
+    }, 100);
+
+    return {
+        stop() {
+            clearInterval(timer);
+            try { source.disconnect(); } catch { }
+            ctx.close();
+            if (micButton) micButton.style.removeProperty("--mic-level");
+        },
+    };
+}
+
+export async function startDictation(serverMode, options, micButton) {
+    options = Object.assign({ autoStop: true, silenceMs: 1500, maxSeconds: 120 }, options || {});
     if (serverMode) {
-        if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        if ((!navigator.mediaDevices?.getUserMedia && !streamFactory) || typeof MediaRecorder === "undefined") {
             return "error:This browser cannot record audio (needs a secure context: https or localhost).";
         }
         try {
-            recorderStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            recorderStream = await acquireStream();
         } catch (e) {
             return "error:Microphone unavailable: " + (e?.message || e?.name || "permission denied");
         }
         const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"]
             .find(t => MediaRecorder.isTypeSupported(t)) || "";
         recordedChunks = [];
+        stopReason = "manual";
         recorder = new MediaRecorder(recorderStream, mimeType ? { mimeType } : undefined);
         recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
         recorder.onstop = async () => {
+            monitorState.phase = "stopped";
+            monitor?.stop();
+            monitor = null;
             const type = recorder.mimeType || mimeType || "audio/webm";
             const blob = new Blob(recordedChunks, { type });
             recorderStream?.getTracks().forEach(t => t.stop());
@@ -60,15 +183,26 @@ export async function startDictation(serverMode) {
             recorder = null;
             // Whisper servers universally accept 16 kHz mono PCM WAV (stock whisper.cpp accepts nothing else),
             // so convert in the browser; fall back to the raw container if decoding fails.
+            monitorState.phase = "converting";
             try {
                 recording = { bytes: await toWav16k(blob), mimeType: "audio/wav" };
             } catch (e) {
                 console.warn("WAV conversion failed, sending raw recording", e);
                 recording = { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: type };
             }
-            await componentRef?.invokeMethodAsync("OnRecordingReady", recording.mimeType, recording.bytes.byteLength);
+            monitorState.phase = "delivering";
+            await componentRef?.invokeMethodAsync("OnRecordingReady", recording.mimeType, recording.bytes.byteLength, stopReason);
+            monitorState.phase = "delivered";
         };
         recorder.start(250);
+        try {
+            monitor = startMonitor(recorderStream, micButton, options, (reason) => {
+                stopReason = reason;
+                stopDictation();
+            });
+        } catch (e) {
+            console.warn("Audio monitoring unavailable; manual stop only", e);
+        }
         return "server";
     }
 
@@ -77,7 +211,7 @@ export async function startDictation(serverMode) {
         return "unsupported";
     }
     recognition = new Recognition();
-    recognition.continuous = true;
+    recognition.continuous = !options.autoStop; // with auto-stop the API ends on its own after a pause
     recognition.interimResults = true;
     recognition.lang = navigator.language || "en-US";
     let pendingError = null;
@@ -107,6 +241,28 @@ export async function startDictation(serverMode) {
         return "error:Could not start browser dictation: " + (e?.message || e);
     }
     return "browser";
+}
+
+// Test hook: record from a synthetic microphone that plays a tone for `toneSeconds` and then goes silent,
+// so the silence detector can be exercised without a real device.
+let syntheticCtx = null; // pinned so the synthetic source is not garbage-collected mid-recording
+
+export function debugUseSyntheticMicrophone(toneSeconds) {
+    streamFactory = async () => {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        syntheticCtx?.close();
+        const ctx = syntheticCtx = new AudioCtx();
+        const destination = ctx.createMediaStreamDestination();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        gain.gain.value = 0.3;
+        osc.frequency.value = 220;
+        osc.connect(gain).connect(destination);
+        osc.start(ctx.currentTime + 0.6);           // quiet first, so the noise floor is sampled on silence
+        osc.stop(ctx.currentTime + 0.6 + toneSeconds);
+        await ctx.resume();
+        return destination.stream;
+    };
 }
 
 export function stopDictation() {

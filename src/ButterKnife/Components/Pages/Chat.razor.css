@@ -107,17 +107,42 @@
     justify-content: flex-end;
 }
 
+.mic-group {
+    position: relative;
+    display: flex;
+    gap: 0.15rem;
+}
+
 .btn-mic {
+    line-height: 1.2;
+    --mic-level: 0;
+}
+
+/* Level meter: the glow grows with the measured input level while recording. */
+.btn-mic-recording {
+    box-shadow: 0 0 0 calc(2px + var(--mic-level) * 10px) rgba(220, 53, 69, calc(0.25 + var(--mic-level) * 0.5));
+    transition: box-shadow 0.1s linear;
+}
+
+.btn-mic-settings {
+    padding-left: 0.4rem;
+    padding-right: 0.4rem;
     line-height: 1.2;
 }
 
-.btn-mic-recording {
-    animation: mic-pulse 1s ease-in-out infinite;
-}
-
-@keyframes mic-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.55); }
-    50%      { box-shadow: 0 0 0 6px rgba(220, 53, 69, 0); }
+.dictation-settings {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 0.35rem);
+    width: 19rem;
+    padding: 0.6rem 0.75rem;
+    background: #fff;
+    border: 1px solid var(--bs-border-color, #dee2e6);
+    border-radius: 0.375rem;
+    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.12);
+    font-size: 0.85rem;
+    text-align: left;
+    z-index: 10;
 }
 
 .btn-attach {
