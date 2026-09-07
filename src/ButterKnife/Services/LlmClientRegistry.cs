@@ -7,7 +7,7 @@ public sealed class LlmClientRegistry(IConnectionStore connections, IHttpClientF
     public async Task<IReadOnlyList<ILlmClient>> GetClientsAsync(CancellationToken cancellationToken = default)
     {
         var list = await connections.ListAsync(cancellationToken);
-        return list.Select(c => LlmClientFactory.Create(c, httpClientFactory)).ToArray();
+        return list.Where(c => LlmClientFactory.IsChatBackend(c.Kind)).Select(c => LlmClientFactory.Create(c, httpClientFactory)).ToArray();
     }
 
     public async Task<ILlmClient> GetAsync(Guid connectionId, CancellationToken cancellationToken = default)

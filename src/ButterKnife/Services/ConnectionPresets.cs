@@ -26,5 +26,8 @@ public static class ConnectionPresets
 
         new("Anthropic", BackendKind.Anthropic, "https://api.anthropic.com", "claude-opus-5", RequiresApiKey: true,
             "Anthropic's hosted Claude models. Requires an API key from console.anthropic.com."),
+
+        new("Whisper (speech to text)", BackendKind.Transcription, "http://localhost:8000/v1", null, RequiresApiKey: false,
+            "Dictation only. Any server with OpenAI's /v1/audio/transcriptions: Speaches / faster-whisper-server, whisper.cpp server, LocalAI, or OpenAI. Default model is used if the server needs one (e.g. whisper-1 or Systran/faster-whisper-small)."),
     ];
 }

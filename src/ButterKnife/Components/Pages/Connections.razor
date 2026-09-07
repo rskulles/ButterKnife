@@ -6,6 +6,7 @@
 @inject IConnectionStore Store
 @inject ConnectionEvents Events
 @inject IHttpClientFactory HttpClientFactory
+@inject TranscriptionClient Transcription
 
 <PageTitle>Connections · ButterKnife</PageTitle>
 
@@ -340,9 +341,22 @@
         using var cts = new CancellationTokenSource(TestTimeout);
         try
         {
-            var client = LlmClientFactory.Create(c, HttpClientFactory);
-            var models = await client.ListModelsAsync(cts.Token);
-            _fetchedModels = models.ToList();
+            IReadOnlyList<string> models;
+            if (c.Kind == BackendKind.Transcription)
+            {
+                models = await Transcription.ProbeAsync(c, cts.Token);
+                _fetchedModels = models.ToList();
+                if (models.Count == 0)
+                {
+                    return (true, "Reachable. It did not list models (whisper.cpp does not), so try the microphone to confirm transcription works.");
+                }
+            }
+            else
+            {
+                var client = LlmClientFactory.Create(c, HttpClientFactory);
+                models = await client.ListModelsAsync(cts.Token);
+                _fetchedModels = models.ToList();
+            }
 
             if (models.Count == 0)
             {
@@ -368,6 +382,7 @@
         BackendKind.Ollama => "Ollama",
         BackendKind.OpenAiCompatible => "OpenAI-compatible",
         BackendKind.Anthropic => "Anthropic",
+        BackendKind.Transcription => "Speech to text",
         _ => kind.ToString(),
     };
 
@@ -376,6 +391,7 @@
         BackendKind.Ollama => "Server root, e.g. http://ollama.local:11434 (no /api suffix).",
         BackendKind.OpenAiCompatible => "Include the version prefix, e.g. http://lmstudio.local:1234/v1.",
         BackendKind.Anthropic => "Normally https://api.anthropic.com. Change only for a proxy.",
+        BackendKind.Transcription => "Include the version prefix, e.g. http://whisper.local:8000/v1. Used only for the microphone button.",
         _ => "",
     };
 

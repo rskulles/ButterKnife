@@ -31,6 +31,9 @@ public enum BackendKind
 
     /// <summary>Anthropic Messages API via the official SDK. BaseUrl is normally https://api.anthropic.com</summary>
     Anthropic,
+
+    /// <summary>Speech-to-text only: an OpenAI-style audio/transcriptions endpoint (Whisper servers). Not a chat backend.</summary>
+    Transcription,
 }
 
 public sealed class LlmBackendOptions

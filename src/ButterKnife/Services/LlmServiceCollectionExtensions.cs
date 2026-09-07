@@ -21,6 +21,8 @@ public static class LlmServiceCollectionExtensions
         services.AddSingleton<ModelCatalog>();
         services.AddSingleton<MarkdownRenderer>();
         services.AddSingleton<ConversationCompactor>();
+        services.AddSingleton<TranscriptionClient>();
+        services.AddSingleton<TranscriptionService>();
         services.AddHostedService<ConnectionSeeder>();
 
         return services;

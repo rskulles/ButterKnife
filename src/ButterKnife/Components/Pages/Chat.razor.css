@@ -107,6 +107,19 @@
     justify-content: flex-end;
 }
 
+.btn-mic {
+    line-height: 1.2;
+}
+
+.btn-mic-recording {
+    animation: mic-pulse 1s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.55); }
+    50%      { box-shadow: 0 0 0 6px rgba(220, 53, 69, 0); }
+}
+
 .btn-attach {
     position: relative;
     overflow: hidden;
