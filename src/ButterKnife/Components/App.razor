@@ -5,6 +5,21 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
+    <script>
+        // Colour mode: "light" | "dark" | "auto" (follow the OS). Runs before the stylesheets so there is no flash.
+        (function () {
+            const KEY = "butterknife.theme";
+            const media = window.matchMedia("(prefers-color-scheme: dark)");
+            const read = () => { try { return localStorage.getItem(KEY) || "auto"; } catch { return "auto"; } };
+            const apply = (mode) => document.documentElement.setAttribute("data-bs-theme", mode === "auto" ? (media.matches ? "dark" : "light") : mode);
+            apply(read());
+            media.addEventListener("change", () => { if (read() === "auto") apply("auto"); });
+            window.butterKnifeTheme = {
+                get: read,
+                set: (mode) => { try { localStorage.setItem(KEY, mode); } catch { } apply(mode); },
+            };
+        })();
+    </script>
     <ResourcePreloader />
     <link rel="stylesheet" href="@Assets["bootstrap.min.css"]" />
     <link rel="stylesheet" href="@Assets["lib/bootstrap-icons/font/bootstrap-icons.min.css"]" />

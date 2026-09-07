@@ -1,0 +1,39 @@
+@* Light / dark / auto colour-mode switch. The actual switching is done by the script in App.razor
+   (window.butterKnifeTheme) so the choice applies before Blazor starts and survives reconnects. *@
+@inject IJSRuntime JS
+
+<div class="btn-group btn-group-sm theme-toggle" role="group" aria-label="Colour mode">
+    @foreach (var (mode, icon, label) in Modes)
+    {
+        <button type="button" class="btn @(mode == _mode ? "btn-primary" : "btn-outline-secondary")"
+                title="@label" aria-label="@label" aria-pressed="@(mode == _mode)" @onclick="() => SetAsync(mode)">
+            <i class="bi @icon" aria-hidden="true"></i>
+        </button>
+    }
+</div>
+
+@code {
+    private static readonly (string Mode, string Icon, string Label)[] Modes =
+    [
+        ("light", "bi-sun-fill", "Light mode"),
+        ("dark", "bi-moon-stars-fill", "Dark mode"),
+        ("auto", "bi-circle-half", "Follow the system setting"),
+    ];
+
+    private string _mode = "auto";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _mode = await JS.InvokeAsync<string>("butterKnifeTheme.get");
+            StateHasChanged();
+        }
+    }
+
+    private async Task SetAsync(string mode)
+    {
+        _mode = mode;
+        await JS.InvokeVoidAsync("butterKnifeTheme.set", mode);
+    }
+}

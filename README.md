@@ -17,6 +17,7 @@ image attachments, dictates prompts through a local Whisper server, and keeps ev
   older turns so long chats keep fitting, on demand or automatically.
 - **Dictation**: a microphone button that records, stops when you pause, and transcribes via a local Whisper server
   (Speaches, faster-whisper-server, whisper.cpp, LocalAI) or the browser's own speech recognition.
+- Light, dark, or follow-the-system colour mode from the toggle in the top bar, remembered per browser.
 - Everything persists server-side, so a phone and a laptop on the LAN see the same conversations. Chats can be
   renamed and deleted from the sidebar or the chat toolbar, with an inline confirmation before deleting.
 
