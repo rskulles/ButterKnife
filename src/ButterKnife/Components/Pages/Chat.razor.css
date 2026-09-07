@@ -71,3 +71,62 @@
 .chat-input textarea {
     resize: none;
 }
+
+/* Markdown (assistant) messages: block layout comes from the HTML, not pre-wrap. */
+.msg-markdown {
+    white-space: normal;
+}
+
+.msg-markdown ::deep > :last-child {
+    margin-bottom: 0;
+}
+
+.msg-markdown ::deep p {
+    margin-bottom: 0.5rem;
+}
+
+.msg-markdown ::deep pre {
+    background: #212529;
+    color: #f8f9fa;
+    padding: 0.6rem 0.75rem;
+    border-radius: 0.375rem;
+    overflow-x: auto;
+    margin-bottom: 0.5rem;
+}
+
+.msg-markdown ::deep pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+}
+
+.msg-markdown ::deep code {
+    background: rgba(0, 0, 0, 0.07);
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.25rem;
+    font-size: 0.9em;
+}
+
+.msg-markdown ::deep table {
+    border-collapse: collapse;
+    margin-bottom: 0.5rem;
+}
+
+.msg-markdown ::deep th,
+.msg-markdown ::deep td {
+    border: 1px solid #ced4da;
+    padding: 0.2rem 0.5rem;
+}
+
+.msg-markdown ::deep blockquote {
+    border-left: 3px solid #adb5bd;
+    padding-left: 0.6rem;
+    color: #495057;
+    margin: 0 0 0.5rem;
+}
+
+.msg-markdown ::deep ul,
+.msg-markdown ::deep ol {
+    padding-left: 1.25rem;
+    margin-bottom: 0.5rem;
+}

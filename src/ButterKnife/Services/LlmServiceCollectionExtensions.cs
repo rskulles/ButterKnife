@@ -26,6 +26,7 @@ public static class LlmServiceCollectionExtensions
         services.AddSingleton<IConfigureOptions<HttpClientFactoryOptions>, ConfigureBackendHttpClients>();
         services.AddSingleton<ILlmClientRegistry, LlmClientRegistry>();
         services.AddSingleton<ModelCatalog>();
+        services.AddSingleton<MarkdownRenderer>();
 
         return services;
     }

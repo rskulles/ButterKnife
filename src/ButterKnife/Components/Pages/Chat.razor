@@ -6,6 +6,7 @@
 @inject ILlmClientRegistry Registry
 @inject ModelCatalog Catalog
 @inject IJSRuntime JS
+@inject MarkdownRenderer Markdown
 
 <PageTitle>ButterKnife</PageTitle>
 
@@ -48,7 +49,14 @@
         {
             <div class="msg msg-@turn.Role.ToString().ToLowerInvariant()">
                 <div class="msg-role">@turn.Role</div>
-                <div class="msg-content">@turn.Text@(turn.IsStreaming ? "▍" : "")</div>
+                @if (turn.Role == ChatRole.Assistant)
+                {
+                    <div class="msg-content msg-markdown">@turn.Html@(turn.IsStreaming ? "▍" : "")</div>
+                }
+                else
+                {
+                    <div class="msg-content">@turn.Text</div>
+                }
             </div>
         }
     </div>
@@ -175,10 +183,10 @@
         _input = "";
         _error = null;
 
-        _turns.Add(new Turn(ChatRole.User, prompt));
+        _turns.Add(new Turn(ChatRole.User, prompt, Markdown));
         var history = _turns.Select(t => new ChatMessage(t.Role, t.Text)).ToList();
 
-        var reply = new Turn(ChatRole.Assistant, "") { IsStreaming = true };
+        var reply = new Turn(ChatRole.Assistant, "", Markdown) { IsStreaming = true };
         _turns.Add(reply);
 
         _isStreaming = true;
@@ -268,15 +276,22 @@
         }
     }
 
-    /// <summary>Mutable UI-side message so streamed tokens can be appended in place.</summary>
-    private sealed class Turn(ChatRole role, string text)
+    /// <summary>Mutable UI-side message so streamed tokens can be appended in place. Rendered HTML is cached until the text changes.</summary>
+    private sealed class Turn(ChatRole role, string text, MarkdownRenderer markdown)
     {
         private readonly StringBuilder _text = new(text);
+        private MarkupString? _html;
 
         public ChatRole Role { get; } = role;
         public string Text => _text.ToString();
         public bool IsStreaming { get; set; }
 
-        public void Append(string delta) => _text.Append(delta);
+        public MarkupString Html => _html ??= new MarkupString(markdown.ToHtml(Text));
+
+        public void Append(string delta)
+        {
+            _text.Append(delta);
+            _html = null;
+        }
     }
 }
