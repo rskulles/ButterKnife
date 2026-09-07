@@ -28,6 +28,6 @@ public static class ConnectionPresets
             "Anthropic's hosted Claude models. Requires an API key from console.anthropic.com."),
 
         new("Whisper (speech to text)", BackendKind.Transcription, "http://localhost:8000/v1", null, RequiresApiKey: false,
-            "Dictation only. Any server with OpenAI's /v1/audio/transcriptions: Speaches / faster-whisper-server, whisper.cpp server, LocalAI, or OpenAI. Default model is used if the server needs one (e.g. whisper-1 or Systran/faster-whisper-small)."),
+            "Dictation only. Works with OpenAI-style /v1/audio/transcriptions servers (Speaches / faster-whisper-server, LocalAI, OpenAI) and with whisper.cpp's server (/inference at the root, e.g. http://host:8080). Audio is sent as 16 kHz WAV. Default model is used only by servers that need one (e.g. whisper-1 or Systran/faster-whisper-small)."),
     ];
 }

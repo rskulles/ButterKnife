@@ -391,7 +391,7 @@
         BackendKind.Ollama => "Server root, e.g. http://ollama.local:11434 (no /api suffix).",
         BackendKind.OpenAiCompatible => "Include the version prefix, e.g. http://lmstudio.local:1234/v1.",
         BackendKind.Anthropic => "Normally https://api.anthropic.com. Change only for a proxy.",
-        BackendKind.Transcription => "Include the version prefix, e.g. http://whisper.local:8000/v1. Used only for the microphone button.",
+        BackendKind.Transcription => "OpenAI-style servers: include /v1 (http://whisper.local:8000/v1). whisper.cpp server: its root (http://whisper.local:8080); either works, the dialect is detected. Used only for the microphone button.",
         _ => "",
     };
 

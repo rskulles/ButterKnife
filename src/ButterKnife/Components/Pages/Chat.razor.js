@@ -58,8 +58,15 @@ export async function startDictation(serverMode) {
             recorderStream?.getTracks().forEach(t => t.stop());
             recorderStream = null;
             recorder = null;
-            recording = { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: type };
-            await componentRef?.invokeMethodAsync("OnRecordingReady", type, recording.bytes.byteLength);
+            // Whisper servers universally accept 16 kHz mono PCM WAV (stock whisper.cpp accepts nothing else),
+            // so convert in the browser; fall back to the raw container if decoding fails.
+            try {
+                recording = { bytes: await toWav16k(blob), mimeType: "audio/wav" };
+            } catch (e) {
+                console.warn("WAV conversion failed, sending raw recording", e);
+                recording = { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType: type };
+            }
+            await componentRef?.invokeMethodAsync("OnRecordingReady", recording.mimeType, recording.bytes.byteLength);
         };
         recorder.start(250);
         return "server";
@@ -124,4 +131,74 @@ export async function debugInjectRecording(base64, mimeType) {
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     recording = { bytes, mimeType };
     await componentRef?.invokeMethodAsync("OnRecordingReady", mimeType, bytes.byteLength);
+}
+
+// ---- WAV conversion ----------------------------------------------------------
+
+const WAV_RATE = 16000;
+
+async function toWav16k(blob) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioCtx();
+    try {
+        const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+        const length = Math.max(1, Math.ceil(decoded.duration * WAV_RATE));
+        const offline = new OfflineAudioContext(1, length, WAV_RATE); // mono destination downmixes; rate change resamples
+        const source = offline.createBufferSource();
+        source.buffer = decoded;
+        source.connect(offline.destination);
+        source.start(0);
+        const rendered = await offline.startRendering();
+        return encodeWav(rendered.getChannelData(0), WAV_RATE);
+    } finally {
+        ctx.close();
+    }
+}
+
+function encodeWav(samples, sampleRate) {
+    const bytesPerSample = 2;
+    const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
+    const view = new DataView(buffer);
+    const writeString = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + samples.length * bytesPerSample, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);          // PCM chunk size
+    view.setUint16(20, 1, true);           // PCM format
+    view.setUint16(22, 1, true);           // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * bytesPerSample, true);
+    view.setUint16(32, bytesPerSample, true);
+    view.setUint16(34, 16, true);          // bits per sample
+    writeString(36, "data");
+    view.setUint32(40, samples.length * bytesPerSample, true);
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++, offset += bytesPerSample) {
+        const s = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+    return new Uint8Array(buffer);
+}
+
+// Test hook: synthesise a 48 kHz stereo tone, run it through the conversion, and report the WAV header.
+export async function debugConvertTone(seconds) {
+    const rate = 48000;
+    const offline = new OfflineAudioContext(2, Math.ceil(seconds * rate), rate);
+    const osc = offline.createOscillator();
+    osc.frequency.value = 440;
+    osc.connect(offline.destination);
+    osc.start(0);
+    const rendered = await offline.startRendering();
+    const stereoWav = encodeWav(rendered.getChannelData(0), rate); // mono source is fine for the test; the container is what matters
+    const converted = await toWav16k(new Blob([stereoWav], { type: "audio/wav" }));
+    const view = new DataView(converted.buffer);
+    return {
+        riff: String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3)),
+        channels: view.getUint16(22, true),
+        sampleRate: view.getUint32(24, true),
+        bits: view.getUint16(34, true),
+        bytes: converted.byteLength,
+        expectedBytes: 44 + Math.ceil(seconds * WAV_RATE) * 2,
+    };
 }

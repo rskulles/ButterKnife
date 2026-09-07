@@ -49,6 +49,39 @@ public class TranscriptionTests
     }
 
     [Fact]
+    public async Task FallsBackToWhisperCppInferenceOn404_AndRemembersDialect()
+    {
+        var calls = new List<string>();
+        var handler = new StubHandler(async (request, ct) =>
+        {
+            var body = await request.Content!.ReadAsStringAsync(ct);
+            calls.Add($"{request.RequestUri!.AbsolutePath} model={body.Replace("\"", "").Contains("name=model")}");
+            return request.RequestUri.AbsolutePath == "/inference"
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"text":" from whisper.cpp "}""", System.Text.Encoding.UTF8, "application/json") }
+                : new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("File Not Found (/v1/audio/transcriptions)", System.Text.Encoding.UTF8, "text/plain") };
+        });
+        var client = new TranscriptionClient(new StubClientFactory(handler, "http://unused/"));
+        var connection = TestConnections.Make("whisper.cpp", BackendKind.Transcription, "http://wcpp.test:8080/v1");
+
+        var text = await client.TranscribeAsync(connection, new MemoryStream([1]), "r.wav", "audio/wav", null, CancellationToken.None);
+        Assert.Equal("from whisper.cpp", text);
+        Assert.Equal(["/v1/audio/transcriptions model=True", "/inference model=False"], calls);
+
+        calls.Clear();
+        await client.TranscribeAsync(connection, new MemoryStream([1]), "r.wav", "audio/wav", null, CancellationToken.None);
+        Assert.Equal(["/inference model=False"], calls); // remembered: no second 404 round trip
+    }
+
+    [Fact]
+    public void ServerRootStripsVersionPrefixOnly()
+    {
+        Assert.Equal("http://h:8080", TranscriptionClient.ServerRoot("http://h:8080/v1"));
+        Assert.Equal("http://h:8080", TranscriptionClient.ServerRoot("http://h:8080/v1/"));
+        Assert.Equal("http://h:8080", TranscriptionClient.ServerRoot("http://h:8080/"));
+        Assert.Equal("http://h/api", TranscriptionClient.ServerRoot("http://h/api"));
+    }
+
+    [Fact]
     public async Task ProbeListsModelsOrReturnsEmpty()
     {
         var withModels = StubHandler.Text("""{"data":[{"id":"whisper-1"},{"id":"Systran/faster-whisper-small"}]}""");
