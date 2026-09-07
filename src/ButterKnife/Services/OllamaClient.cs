@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
-using ButterKnife.Data;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ButterKnife.Data;
 
 namespace ButterKnife.Services;
 

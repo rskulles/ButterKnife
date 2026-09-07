@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ButterKnife is a .NET Blazor Web App (Server interactivity) for chatting with LLMs hosted on the local network (e.g. Ollama, LM Studio, vLLM, llama.cpp server). The LLM backends are *not* on this machine; every backend is reached over HTTP at a configurable base URL.
 
-Toolchain: .NET SDK 10.0 (`/usr/lib/dotnet/sdk`), target `net10.0`. Solution file is `ButterKnife.slnx` (XML solution format); projects are `src/ButterKnife` (web app) and `tests/ButterKnife.Tests` (xUnit 2.x — no `TestContext`, use `CancellationToken.None`).
+README.md is the developer-facing introduction (setup, configuration, layout); this file holds the detail an agent needs beyond it.
+
+Toolchain: .NET SDK 10.0 (`/usr/lib/dotnet/sdk`), target `net10.0`. `Directory.Build.props` turns warnings into errors for every project; `.editorconfig` carries the C# style. Solution file is `ButterKnife.slnx` (XML solution format); projects are `src/ButterKnife` (web app) and `tests/ButterKnife.Tests` (xUnit 2.x — no `TestContext`, use `CancellationToken.None`).
 
 ## Commands
 
@@ -27,9 +29,12 @@ dotnet test --filter "FullyQualifiedName~OllamaClientTests.StreamsTokensFromNdjs
 # Override backends without editing config (env vars use __ as the section separator)
 Llm__Backends__0__BaseUrl=http://127.0.0.1:11434 dotnet run --project src/ButterKnife
 
-# Formatting (analyzers run as part of build)
+# Formatting (analyzers run as part of build; warnings are errors via Directory.Build.props)
 dotnet format
 dotnet format --verify-no-changes
+
+# Offline development against the stub server (see "Manual testing" below)
+python3 tools/stub-llm-server.py
 ```
 
 ## Architecture
@@ -40,7 +45,7 @@ dotnet format --verify-no-changes
 
 **Layering:**
 
-- `Components/Pages/Chat.razor` (route `/`) – the chat page. Holds conversation state for the circuit, renders messages, and appends streamed tokens in place via a mutable `Turn` class. Its collocated `Chat.razor.js` module handles Enter-to-send and auto-scroll; Enter calls back into the component through a `DotNetObjectReference` (`[JSInvokable] SendFromKeyboardAsync`) rather than clicking the Send button, because that button is swapped for a Stop button while streaming and a captured element would go stale.
+- `Components/Pages/Chat.razor` (route `/`) – the chat page. Markup only; the code is split into partial-class files by concern: `Chat.razor.cs` (state, lifecycle, model/persona selection, send/stream loop), `Chat.Images.cs`, `Chat.Context.cs` (meter + compaction), `Chat.Dictation.cs`, with transcript entries in `ChatTurn.cs`. `Connections.razor` follows the same pattern with `Connections.razor.cs`. Services are injected with `[Inject]` properties in the `.cs` files, not `@inject`. It Holds conversation state for the circuit, renders messages, and appends streamed tokens in place via a mutable `Turn` class. Its collocated `Chat.razor.js` module handles Enter-to-send and auto-scroll; Enter calls back into the component through a `DotNetObjectReference` (`[JSInvokable] SendFromKeyboardAsync`) rather than clicking the Send button, because that button is swapped for a Stop button while streaming and a captured element would go stale.
 - **Connections** (`Data/LlmConnection`, `IConnectionStore`, `SqliteConnectionStore`) are the LLM servers, managed at runtime on the `/connections` page and stored in SQLite. `Kind` is `Ollama` | `OpenAiCompatible` | `Anthropic`. API keys are encrypted at rest with ASP.NET Core Data Protection (`IDataProtector`, purpose `ButterKnife.Connections.ApiKey`); if the key ring changes the key reads back as null and must be re-entered. `Llm:Backends` in config is **seed data only**: `ConnectionSeeder` (hosted service) copies it into the table on first start when the table is empty, then never again. `Services/ConnectionPresets` holds the stock endpoints (Ollama, LM Studio, OpenAI-compatible, Anthropic) the page offers.
 - `Services/ILlmClient` – the single abstraction over a connection. `StreamChatAsync` returns `IAsyncEnumerable<string>` of token deltas. Implementations are per wire protocol and are built per use by `LlmClientFactory.Create(connection, httpClientFactory)`; `ILlmClientRegistry` resolves them from the store (`GetClientsAsync`, `GetAsync(connectionId)`):
   - `OllamaClient` – Ollama native API (`api/chat` NDJSON stream, `api/tags`). `BaseUrl` is the server root.
@@ -75,4 +80,4 @@ dotnet format --verify-no-changes
 
 ## Manual testing without a real LLM
 
-`.claude/launch.json` has two configurations: `butterknife` (plain `dotnet run`, port 5175) and `butterknife-fake-llm` (port 5176 so it can run beside a manually started instance), which starts the app with the seed backends pointed at `http://127.0.0.1:11434` (only matters for an empty database; otherwise add connections on `/connections`). Pair the latter with a small stub server that answers `/api/tags`, `/api/chat` (NDJSON), `/v1/models`, `/v1/chat/completions` (SSE) and, for the Anthropic kind, `/v1/messages` (Anthropic SSE events) on that port; the unit tests in `tests/ButterKnife.Tests/StubHttp.cs` show the exact wire shapes expected. Browser automation note: synthetic "Return" key presses may not reach the textarea's `keydown` listener; dispatch a `KeyboardEvent('keydown', {key: 'Enter'})` from JS instead when scripting the page.
+`.claude/launch.json` has two configurations: `butterknife` (plain `dotnet run`, port 5175) and `butterknife-fake-llm` (port 5176 so it can run beside a manually started instance), which starts the app with the seed backends pointed at `http://127.0.0.1:11434` (only matters for an empty database; otherwise add connections on `/connections`). Pair the latter with `tools/stub-llm-server.py` (`python3 tools/stub-llm-server.py --port 11434 --delay 0.08`), which speaks Ollama, OpenAI-compatible, Anthropic and whisper.cpp well enough to list models, stream a canned markdown reply with usage/timing fields, and transcribe; it logs the roles and image counts of every request. Slow `--delay` to watch streaming UI. The unit tests in `tests/ButterKnife.Tests/StubHttp.cs` show the exact wire shapes expected. Browser automation note: synthetic "Return" key presses may not reach the textarea's `keydown` listener; dispatch a `KeyboardEvent('keydown', {key: 'Enter'})` from JS instead when scripting the page.
