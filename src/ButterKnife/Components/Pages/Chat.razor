@@ -3,12 +3,11 @@
 @using System.Diagnostics
 @using System.Text
 @using ButterKnife.Options
-@using ButterKnife.Services
 @using Microsoft.Extensions.Options
 @implements IAsyncDisposable
 @inject ILlmClientRegistry Registry
 @inject ModelCatalog Catalog
-@inject IJSRuntime JS
+@inject IJSRuntime Js
 @inject MarkdownRenderer Markdown
 @inject IConversationStore Store
 @inject IPersonaStore Personas
@@ -63,8 +62,7 @@
         {
             @if (!_loadingModels && _models.Count == 0 && _backendErrors.Count == 0)
             {
-                <p class="text-center text-body-secondary mt-5">No LLM connections yet. <a href="connections">Add a
-                        connection</a> to get started.</p>
+                <p class="text-center text-body-secondary mt-5">No LLM connections yet. <a href="connections">Add a connection</a> to get started.</p>
             }
             else
             {
@@ -169,7 +167,7 @@
             <label class="btn btn-sm btn-outline-secondary @(_isStreaming ? "disabled" : "")"
                    title="Attach images (JPEG, PNG, GIF, WebP)">
                 <i class="bi bi-plus-lg" aria-hidden="true"></i><span class="visually-hidden">Attach images</span>
-                <InputFile OnChange="OnFilesSelectedAsync" multiple accept="image/*" disabled="@_isStreaming"
+                <InputFile OnChange="@(OnFilesSelectedAsync)" multiple accept="image/*" disabled="@_isStreaming"
                            class="d-none"/>
             </label>
             <div class="btn-group btn-group-sm position-relative">
@@ -183,7 +181,8 @@
                     <i class="bi @(_dictation switch { DictationState.Recording => "bi-stop-fill", DictationState.Transcribing => "bi-hourglass-split", _ => "bi-mic-fill" })"
                        aria-hidden="true"></i>
                 </button>
-                <button type="button" class="btn btn-secondary" @onclick="() => _showDictationSettings = !_showDictationSettings"
+                <button type="button" class="btn btn-secondary"
+                        @onclick="() => _showDictationSettings = !_showDictationSettings"
                         title="Dictation settings" aria-label="Dictation settings"
                         aria-expanded="@_showDictationSettings" disabled="@(_dictation != DictationState.Idle)">
                     <i class="bi bi-gear" aria-hidden="true"></i>
@@ -244,13 +243,13 @@
             @if (Selected is not null || _turns.Count > 0)
             {
                 var (used, exact) = CurrentContext();
-                var percent = _contextWindow is { } window && window > 0 ? Math.Min(100, used * 100.0 / window) : (double?)null;
+                var percent = _contextWindow is { } window and > 0 ? Math.Min(100, used * 100.0 / window) : (double?)null;
                 <div class="d-flex flex-row align-items-center gap-2 small text-body-secondary"
                      title="@ContextTooltip(used, exact, percent)">
                     @{
                         // Ring: circumference of r=15.5 is ~97.4; the arc's dash offset is the unfilled remainder.
-                        const double Circumference = 97.39;
-                        var offset = (Circumference * (1 - (percent ?? 0) / 100.0)).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+                        const double circumference = 97.39;
+                        var offset = (circumference * (1 - (percent ?? 0) / 100.0)).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
                         var ringColour = percent >= 90 ? "text-danger" : percent >= 70 ? "text-warning" : "text-primary";
                     }
                     <svg class="context-ring @(percent is null ? "text-body-tertiary" : ringColour)" width="34"
@@ -264,7 +263,7 @@
                         {
                             <circle cx="18" cy="18" r="15.5" fill="none" stroke="currentColor" stroke-width="3"
                                     stroke-linecap="round"
-                                    stroke-dasharray="@Circumference" stroke-dashoffset="@offset"
+                                    stroke-dasharray="@circumference" stroke-dashoffset="@offset"
                                     transform="rotate(-90 18 18)"/>
                         }
                         <text x="18" y="18" text-anchor="middle" dominant-baseline="central" font-size="10"
@@ -383,7 +382,7 @@
         _conversationId = Id;
         _title = null;
         _personaKey = DefaultPersonaKey();
-        _compaction?.Cancel();
+        await (_compaction?.CancelAsync()??Task.CompletedTask);
         _summary = null;
         _summaryThrough = 0;
         _contextTokens = null;
@@ -432,7 +431,7 @@
     {
         if (firstRender)
         {
-            _js = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Chat.razor.js");
+            _js = await Js.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Chat.razor.js");
             _self = DotNetObjectReference.Create(this);
             // The textarea element survives re-renders (only its attributes change), so one wiring is enough.
             await _js.InvokeVoidAsync("wireInput", _inputElement, _self);
@@ -490,8 +489,6 @@
         _selectedKey = e.Value?.ToString() ?? "";
         _ = RefreshContextWindowAsync();
     }
-
-    private void NewChat() => Nav.NavigateTo("/");
 
     /// <summary>The sidebar can rename the open chat; keep the page title in step.</summary>
     private void OnConversationsChanged() =>
@@ -636,13 +633,13 @@
         await RenderAndScrollAsync();
         if (_js is not null)
         {
-            await _js.InvokeVoidAsync("focus", _inputElement);
+            await _js.InvokeVoidAsync("focus", _inputElement); // no token: after Stop it would already be cancelled and this call would throw
         }
 
         await AfterReplyContextAsync(conversationId, model);
     }
 
-    /// <summary>Creates the conversation on first send and moves the URL to it; keeps the stored model in sync afterwards.</summary>
+    /// <summary>Creates the conversation on first send and moves the URL to it; keeps the stored model in sync afterward.</summary>
     private async Task<Guid> EnsureConversationAsync(ModelDescriptor model, string firstPrompt)
     {
         if (_conversationId is { } existing)
@@ -741,7 +738,7 @@
             }
         }
 
-        _disposed.Cancel();
+        await _disposed.CancelAsync();
         _generation?.Dispose();
         _compaction?.Dispose();
         _disposed.Dispose();
@@ -934,7 +931,7 @@
         }
 
         var threshold = LlmOptions.Value.AutoCompactThreshold;
-        if (threshold > 0 && _contextWindow is { } window && window > 0 && _contextTokens is { } used
+        if (threshold > 0 && _contextWindow is { } window and > 0 && _contextTokens is { } used
             && used >= window * threshold && CanCompact)
         {
             await CompactAsync();
@@ -942,7 +939,7 @@
         }
     }
 
-    /// <summary>Summarises everything older than the last few turns and stores it as the checkpoint. The transcript is untouched.</summary>
+    /// <summary>Summarizes everything older than the last few turns and stores it as the checkpoint. The transcript is untouched.</summary>
     private async Task CompactAsync()
     {
         if (!CanCompact || Selected is not { } model || _conversationId is not { } conversationId)
@@ -1171,7 +1168,7 @@
 
     // ---------------------------------------------------------------- transcript entry
     /// <summary>Mutable UI-side message so streamed tokens can be appended in place.</summary>
-    /// <remarks>Rendered HTML is cached until the text changes, so throttled re-renders during streaming do not re-parse older messages.</remarks>
+    /// <remarks>Rendered HTML is cached until the text changes, so throttled re-renders during streaming do not reparse older messages.</remarks>
     private sealed class ChatTurn(ChatRole role, string text, MarkdownRenderer markdown, IReadOnlyList<ChatImage>? images = null)
     {
         private readonly StringBuilder _text = new(text);
@@ -1191,7 +1188,7 @@
         /// <summary>Set when the backend reports usage at the end of the stream.</summary>
         public TokenUsage? Usage { get; set; }
 
-        public TimeSpan? TimeToFirstToken => _firstTokenAt is { } first && _startedAt != 0
+        private TimeSpan? TimeToFirstToken => _firstTokenAt is { } first && _startedAt != 0
             ? Stopwatch.GetElapsedTime(_startedAt, first)
             : null;
 
@@ -1202,22 +1199,23 @@
             get => _isStreaming;
             set
             {
-                if (value && !_isStreaming)
+                switch (value)
                 {
-                    _startedAt = Stopwatch.GetTimestamp();
-                    _firstTokenAt = null;
-                    _endedAt = null;
-                }
-                else if (!value && _isStreaming)
-                {
-                    _endedAt = Stopwatch.GetTimestamp();
+                    case true when !_isStreaming:
+                        _startedAt = Stopwatch.GetTimestamp();
+                        _firstTokenAt = null;
+                        _endedAt = null;
+                        break;
+                    case false when _isStreaming:
+                        _endedAt = Stopwatch.GetTimestamp();
+                        break;
                 }
 
                 _isStreaming = value;
             }
         }
 
-        public TimeSpan Elapsed => _startedAt == 0
+        private TimeSpan Elapsed => _startedAt == 0
             ? TimeSpan.Zero
             : Stopwatch.GetElapsedTime(_startedAt, _endedAt ?? Stopwatch.GetTimestamp());
 
