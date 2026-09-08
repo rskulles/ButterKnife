@@ -4,11 +4,3 @@
 nav ::deep .nav-link {
     min-width: 0;
 }
-
-@media (min-width: 768px) {
-    /* Sidebar scrolls on its own for tall conversation lists. */
-    .nav-scrollable {
-        height: calc(100vh - 3.5rem);
-        overflow-y: auto;
-    }
-}

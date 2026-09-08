@@ -1,9 +1,5 @@
 /* Only what Bootstrap utilities cannot express. Layout, spacing and colour live in the markup as utility classes. */
 
-.chat {
-    height: calc(100vh - 3.5rem - 2rem);
-}
-
 /* Flex child that scrolls: needs a zero basis and min-height so it shrinks instead of growing the page. */
 .chat-messages {
     flex: 1 1 0;
@@ -30,10 +26,9 @@
     transition: box-shadow 0.1s linear;
 }
 
-/* "Window unknown" state of the context meter: a faint striped bar spanning the track says "no scale" rather than "0%". */
-.context-unknown {
-    background-color: var(--bs-secondary-bg-subtle);
-    opacity: 0.6;
+/* Context ring: the arc eases to its new length when the count changes. */
+.context-ring circle {
+    transition: stroke-dashoffset 0.4s ease;
 }
 
 /* Rendered markdown inside replies (Markdig adds Bootstrap classes to tables/quotes/images; code blocks need these). */

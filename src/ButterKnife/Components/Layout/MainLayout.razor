@@ -6,11 +6,12 @@
     </div>
 
     <main>
-        <div class="d-flex align-items-center justify-content-end px-4 border-bottom bg-body-tertiary sticky-top" style="height: 3.5rem">
+        <div class="d-flex align-items-center justify-content-end px-4 border-bottom bg-body-tertiary flex-shrink-0" style="height: 3.5rem">
             <ThemeToggle />
         </div>
 
-        <article class="content px-4">
+        @* flex-grow + overflow-auto: pages taller than the viewport scroll here; the chat page fills it instead. *@
+        <article class="content px-4 pb-3 d-flex flex-column flex-grow-1 overflow-auto">
             @Body
         </article>
     </main>

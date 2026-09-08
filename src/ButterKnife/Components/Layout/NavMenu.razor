@@ -1,11 +1,12 @@
-@implements IDisposable
+@implements IAsyncDisposable
 @inject IConversationStore Store
 @inject ConversationEvents Events
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 
 @* data-bs-theme="dark" makes Bootstrap render links, buttons and inputs for the dark sidebar in either colour mode. *@
-<div data-bs-theme="dark">
-    <div class="navbar navbar-dark px-3 bg-black bg-opacity-25" style="min-height: 3.5rem">
+<div data-bs-theme="dark" class="d-flex flex-column flex-grow-1 overflow-hidden">
+    <div class="navbar navbar-dark px-3 bg-black bg-opacity-25 flex-shrink-0" style="min-height: 3.5rem">
         <a class="navbar-brand" href="">ButterKnife</a>
         <button class="navbar-toggler d-md-none" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-nav"
                 aria-controls="sidebar-nav" aria-expanded="false" aria-label="Toggle navigation">
@@ -13,7 +14,7 @@
         </button>
     </div>
 
-    <div class="collapse d-md-block nav-scrollable" id="sidebar-nav">
+    <div class="collapse d-md-block flex-grow-1 overflow-auto" id="sidebar-nav">
         <nav class="nav nav-pills flex-column flex-nowrap gap-1 p-2">
             <NavLink class="nav-link text-nowrap" href="" Match="NavLinkMatch.All">
                 <i class="bi bi-plus-square-fill me-2" aria-hidden="true"></i>New chat
@@ -69,11 +70,38 @@
     private string _renameText = "";
     private string? _renameError;
 
+    private IJSObjectReference? _js;
+
     protected override async Task OnInitializedAsync()
     {
         Events.Changed += OnConversationsChanged;
+        Nav.LocationChanged += OnLocationChanged;
         await LoadAsync();
     }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _js = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Layout/NavMenu.razor.js");
+        }
+    }
+
+    /// <summary>On phones the list is a collapse; fold it away once a link has navigated.</summary>
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) =>
+        _ = InvokeAsync(async () =>
+        {
+            if (_js is not null)
+            {
+                try
+                {
+                    await _js.InvokeVoidAsync("closeSidebar");
+                }
+                catch (JSDisconnectedException)
+                {
+                }
+            }
+        });
 
     private async Task LoadAsync()
     {
@@ -151,5 +179,19 @@
         }
     }
 
-    public void Dispose() => Events.Changed -= OnConversationsChanged;
+    public async ValueTask DisposeAsync()
+    {
+        Events.Changed -= OnConversationsChanged;
+        Nav.LocationChanged -= OnLocationChanged;
+        if (_js is not null)
+        {
+            try
+            {
+                await _js.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
 }

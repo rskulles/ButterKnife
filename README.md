@@ -64,8 +64,7 @@ the app. Run it as another user or on another machine and stored keys read back 
 
 ```
 src/ButterKnife/
-  Components/Pages/      Chat (markup in Chat.razor; code split by concern into Chat.razor.cs,
-                         Chat.Images.cs, Chat.Context.cs, Chat.Dictation.cs; ChatTurn.cs),
+  Components/Pages/      Chat.razor (markup + code in one file, sectioned by comment banners),
                          Connections (.razor + .razor.cs)
   Components/Shared/     ButterKnifeThrobber (the knife + stats readout)
   Components/Layout/     NavMenu (conversation list), MainLayout
