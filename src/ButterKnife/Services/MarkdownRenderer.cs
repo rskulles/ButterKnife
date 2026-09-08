@@ -10,6 +10,7 @@ public sealed class MarkdownRenderer
 {
     private readonly MarkdownPipeline _pipeline = new MarkdownPipelineBuilder()
         .UseAdvancedExtensions()   // tables, task lists, fenced-code attributes, auto-links, etc.
+        .UseBootstrap()            // adds .table / .blockquote / .img-fluid so replies pick up the theme without custom CSS
         .UseSoftlineBreakAsHardlineBreak()
         .DisableHtml()
         .Build();

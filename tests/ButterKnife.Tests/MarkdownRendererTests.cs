@@ -23,7 +23,7 @@ public class MarkdownRendererTests
     {
         var html = _renderer.ToHtml("| a | b |\n|---|---|\n| 1 | 2 |");
 
-        Assert.Contains("<table>", html);
+        Assert.Contains("<table class=\"table\">", html);
         Assert.Contains("<td>2</td>", html);
     }
 

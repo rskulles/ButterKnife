@@ -5,6 +5,11 @@
     padding-top: 1.1rem;
 }
 
+/* Preserve line breaks in user-entered text (messages, persona prompts). Bootstrap has no pre-wrap utility. */
+.prewrap {
+    white-space: pre-wrap;
+}
+
 h1:focus {
     outline: none;
 }
@@ -53,16 +58,3 @@ h1:focus {
         right: 0.75rem;
         top: 0.5rem;
     }
-
-/* The Bootswatch "morph" build keeps its light, inset field background in dark mode, which leaves light text on a
-   light field in selects and inputs. Give fields a dark surface there; everything else about them stays the theme's. */
-[data-bs-theme="dark"] .form-control,
-[data-bs-theme="dark"] .form-select {
-    background-color: var(--bs-secondary-bg);
-    color: var(--bs-body-color);
-    border-color: var(--bs-border-color);
-}
-
-[data-bs-theme="dark"] .form-control::placeholder {
-    color: var(--bs-secondary-color);
-}

@@ -2,8 +2,8 @@
    Click the knife and it does a full spin, then goes back to throbbing. *@
 @implements IDisposable
 
-<div class="knife-row">
-    <button type="button" class="knife @(_spinning ? "knife-spin" : "knife-throb")"
+<div class="d-flex align-items-center gap-2 mt-1">
+    <button type="button" class="btn btn-link p-0 lh-1 @(_spinning ? "knife-spin" : "knife-throb")"
             title="@(_spinning ? "Wheee" : "Generating… (click me)")" aria-label="Generating response"
             @onclick="SpinAsync">
         <svg viewBox="0 0 64 20" width="40" height="12.5" aria-hidden="true" focusable="false">
@@ -31,7 +31,7 @@
 
     @if (Stats is not null)
     {
-        <span class="knife-stats" title="@StatsTooltip">@FormatStats(Stats(), live: true)</span>
+        <span class="small text-body-secondary text-nowrap" title="@StatsTooltip">@FormatStats(Stats(), live: true)</span>
     }
 </div>
 

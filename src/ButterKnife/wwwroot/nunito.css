@@ -1,9 +1,0 @@
-/* Nunito, the morph theme's font, served locally (fontsource files restored by LibMan into lib/nunito).
-   Loaded before the theme so its own Google Fonts @import is redundant; offline, that import simply fails and
-   these declarations are used. Weights match what the theme asks for: 400, 600, 700. */
-@import url("lib/nunito/latin-400.css");
-@import url("lib/nunito/latin-600.css");
-@import url("lib/nunito/latin-700.css");
-@import url("lib/nunito/latin-ext-400.css");
-@import url("lib/nunito/latin-ext-600.css");
-@import url("lib/nunito/latin-ext-700.css");

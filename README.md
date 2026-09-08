@@ -92,7 +92,7 @@ How the pieces fit:
 
 ## Development
 
-The stylesheet is a [Bootswatch](https://bootswatch.com) "morph" build of Bootstrap 5.3.8 committed at `wwwroot/bootstrap.min.css`; swap that file to re-theme. Its Nunito font is served locally (`wwwroot/nunito.css` over fontsource files LibMan restores into `wwwroot/lib/nunito`), so the app works offline; the theme's Google Fonts `@import` was removed from both Bootswatch files. Bootstrap's JS bundle and Bootstrap Icons are managed by [LibMan](https://learn.microsoft.com/aspnet/core/client-side/libman/):
+The stylesheet is a [Bootswatch](https://bootswatch.com) "pulse" build of Bootstrap 5.3.8 committed at `wwwroot/bootstrap_pulse.min.css`; swap the link in `App.razor` to re-theme (the earlier "morph" build is still in `wwwroot` for that). Pulse uses the system font stack, so nothing is fetched from the internet. Bootstrap's JS bundle and Bootstrap Icons are managed by [LibMan](https://learn.microsoft.com/aspnet/core/client-side/libman/):
 `src/ButterKnife/libman.json` pins them and `dotnet build` restores them into `wwwroot/lib/` (git-ignored). To add or
 update one, use the CLI, which is a local dotnet tool (`dotnet tool restore` once after cloning):
 
