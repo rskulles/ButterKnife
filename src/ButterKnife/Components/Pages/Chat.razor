@@ -22,7 +22,7 @@
 
 <PageTitle>@(_title is null ? "ButterKnife" : $"{_title} · ButterKnife")</PageTitle>
 
-<div class="d-flex flex-column gap-2 flex-grow-1 overflow-hidden">
+<div class="chat-frame d-flex flex-column gap-2 flex-grow-1">
     <header class="d-flex flex-wrap align-items-center gap-2">
         <label class="visually-hidden" for="persona-select">Persona</label>
         <select id="persona-select" class="form-select form-select-sm w-auto ms-auto"
@@ -172,7 +172,7 @@
                 <InputFile OnChange="OnFilesSelectedAsync" multiple accept="image/*" disabled="@_isStreaming"
                            class="d-none"/>
             </label>
-            <div class="btn-group btn-group-sm">
+            <div class="btn-group btn-group-sm position-relative">
 
                 <button type="button" @ref="_micElement"
                         class="btn btn-mic @(_dictation switch { DictationState.Recording => "btn-danger btn-mic-recording", DictationState.Transcribing => "btn-outline-secondary", _ => "btn-outline-secondary" })"
@@ -183,14 +183,15 @@
                     <i class="bi @(_dictation switch { DictationState.Recording => "bi-stop-fill", DictationState.Transcribing => "bi-hourglass-split", _ => "bi-mic-fill" })"
                        aria-hidden="true"></i>
                 </button>
-                <button type="button" class="btn" @onclick="() => _showDictationSettings = !_showDictationSettings"
+                <button type="button" class="btn btn-secondary" @onclick="() => _showDictationSettings = !_showDictationSettings"
                         title="Dictation settings" aria-label="Dictation settings"
-                        aria-expanded="@_showDictationSettings" disabled="@(_dictation != DictationState.Idle)"><i
-                        class="bi bi-gear" aria-hidden="true"></i></button>
+                        aria-expanded="@_showDictationSettings" disabled="@(_dictation != DictationState.Idle)">
+                    <i class="bi bi-gear" aria-hidden="true"></i>
+                </button>
                 @if (_showDictationSettings)
                 {
-                    <div class="dropdown-menu show p-2 shadow small position-absolute end-0 bottom-100 mb-1"
-                         style="width: 19rem" role="dialog" aria-label="Dictation settings">
+                    <div class="dropdown-menu show p-2 shadow small position-absolute start-0 bottom-100 mb-1"
+                         style="width: min(19rem, calc(100vw - 2rem))" role="dialog" aria-label="Dictation settings">
                         <div class="form-check">
                             <input type="checkbox" class="form-check-input" id="dict-autostop" checked="@_autoStop"
                                    @onchange="e => SaveDictationPrefsAsync(autoStop: (bool)e.Value!)"/>
@@ -291,6 +292,7 @@
 </div>
 
 @code {
+
     // ---------------------------------------------------------------- core: state, lifecycle, selection, send/stream
     private static readonly TimeSpan RenderInterval = TimeSpan.FromMilliseconds(50);
 
@@ -364,6 +366,7 @@
         {
             return "";
         }
+
         return _personas.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))?.Id.ToString() ?? "";
     }
 
@@ -498,6 +501,7 @@
             {
                 return;
             }
+
             try
             {
                 var summary = (await Store.ListAsync(_disposed.Token)).FirstOrDefault(c => c.Id == id);
@@ -579,10 +583,12 @@
                     usage = delta.Usage;
                     reply.Usage = usage;
                 }
+
                 if (delta.Text is not { } text)
                 {
                     continue;
                 }
+
                 reply.Append(text);
 
                 if (Stopwatch.GetElapsedTime(lastRender) >= RenderInterval)
@@ -607,6 +613,7 @@
                 await PersistReplyAsync(conversationId, completedText);
                 return; // circuit is gone; nothing to render
             }
+
             reply.Append(reply.Text.Length == 0 ? "(stopped)" : " (stopped)");
         }
         catch (Exception ex)
@@ -733,6 +740,7 @@
             {
             }
         }
+
         _disposed.Cancel();
         _generation?.Dispose();
         _compaction?.Dispose();
@@ -838,6 +846,7 @@
         {
             history.Add(new ChatMessage(ChatRole.System, system));
         }
+
         history.AddRange(_turns.Skip(_summaryThrough).Select(t => new ChatMessage(t.Role, t.Text, t.Images)));
         return history;
     }
@@ -850,6 +859,7 @@
         {
             return (exact + pending, pending == 0);
         }
+
         return (TokenEstimator.Estimate(BuildHistory()) + pending, false);
     }
 
@@ -860,9 +870,9 @@
 
     private string ContextTooltip(int used, bool exact, double? percent) =>
         ContextSummary(used, exact, percent) + ". "
-        + (exact ? "Exact, as reported by the backend after the last reply." : "Estimated (~4 characters per token, ~1000 per image); exact after the next reply.")
-        + (_contextWindow is null ? " The model's context window is unknown; set it on the connection to see a percentage." : "")
-        + (_summary is not null ? $" {_summaryThrough} older messages are compacted into a summary." : "");
+                                             + (exact ? "Exact, as reported by the backend after the last reply." : "Estimated (~4 characters per token, ~1000 per image); exact after the next reply.")
+                                             + (_contextWindow is null ? " The model's context window is unknown; set it on the connection to see a percentage." : "")
+                                             + (_summary is not null ? $" {_summaryThrough} older messages are compacted into a summary." : "");
 
     private static string FormatTokens(int tokens) => tokens switch
     {
@@ -988,7 +998,13 @@
 
     // ---------------------------------------------------------------- dictation (JS side in Chat.razor.js)
     // Dictation: server mode records audio and sends it to the transcription connection; browser mode uses SpeechRecognition.
-    private enum DictationState { Idle, Recording, Transcribing }
+    private enum DictationState
+    {
+        Idle,
+        Recording,
+        Transcribing
+    }
+
     private const long MaxRecordingBytes = 25 * 1024 * 1024;
     private DictationState _dictation;
     private string? _dictationStatus;
@@ -1064,6 +1080,7 @@
         {
             _dictationBase = (_dictationBase + finalText).TrimEnd() + " ";
         }
+
         _dictationInterim = interimText;
         _input = _dictationBase + _dictationInterim;
         return InvokeAsync(StateHasChanged);
@@ -1195,6 +1212,7 @@
                 {
                     _endedAt = Stopwatch.GetTimestamp();
                 }
+
                 _isStreaming = value;
             }
         }
@@ -1213,4 +1231,5 @@
             Chunks++;
         }
     }
+
 }

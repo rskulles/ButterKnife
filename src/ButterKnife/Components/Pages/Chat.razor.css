@@ -1,5 +1,11 @@
 /* Only what Bootstrap utilities cannot express. Layout, spacing and colour live in the markup as utility classes. */
 
+/* The frame is a flex child of the scrolling article: min-height 0 lets it shrink to the article without
+   overflow-hidden, so popovers (dictation settings) can extend above the composer. */
+.chat-frame {
+    min-height: 0;
+}
+
 /* Flex child that scrolls: needs a zero basis and min-height so it shrinks instead of growing the page. */
 .chat-messages {
     flex: 1 1 0;
