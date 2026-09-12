@@ -1,0 +1,99 @@
+@* Settings replaces the whole page: the chat sidebar gives way to a section list, with a way back to the chat.
+   Same frame as MainLayout (.page / .sidebar / main in app.css) and the same phone collapse as NavMenu. *@
+@inherits LayoutComponentBase
+@implements IAsyncDisposable
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<div class="page">
+    <div class="sidebar">
+        <div class="d-flex flex-column flex-grow-1 overflow-hidden">
+            <div class="navbar px-3 border-bottom flex-shrink-0" style="min-height: 3.5rem">
+                <span class="navbar-brand fw-semibold text-body"><i class="bi bi-gear me-2" aria-hidden="true"></i>Settings</span>
+                <button class="navbar-toggler d-md-none" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-nav"
+                        aria-controls="sidebar-nav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+            </div>
+
+            <div class="collapse d-md-block flex-grow-1 settings-nav" id="sidebar-nav">
+                <div class="d-flex flex-column h-100">
+                    <nav class="nav nav-pills flex-column flex-nowrap gap-1 p-2 flex-grow-1 overflow-auto">
+                        <NavLink class="nav-link text-nowrap" href="settings" Match="NavLinkMatch.All">
+                            <i class="bi bi-sliders me-2" aria-hidden="true"></i>General
+                        </NavLink>
+                        <NavLink class="nav-link text-nowrap" href="settings/connections">
+                            <i class="bi bi-hdd-network me-2" aria-hidden="true"></i>Connections
+                        </NavLink>
+                    </nav>
+
+                    <div class="d-flex align-items-center justify-content-between gap-2 p-2 border-top flex-shrink-0">
+                        <nav class="nav nav-pills">
+                            <NavLink class="nav-link text-nowrap px-2 py-1" href="" Match="NavLinkMatch.All">
+                                <i class="bi bi-arrow-left me-2" aria-hidden="true"></i>Back to chat
+                            </NavLink>
+                        </nav>
+                        <div class="flex-shrink-0"><ThemeToggle /></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <main>
+        <article class="content px-4 pb-3 d-flex flex-column flex-grow-1 overflow-auto">
+            @Body
+        </article>
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+    private IJSObjectReference? _js;
+
+    protected override void OnInitialized() => Nav.LocationChanged += OnLocationChanged;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _js = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Layout/NavMenu.razor.js");
+        }
+    }
+
+    /// <summary>On phones the section list is a collapse; fold it away once a link has navigated (shared with NavMenu).</summary>
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) =>
+        _ = InvokeAsync(async () =>
+        {
+            if (_js is not null)
+            {
+                try
+                {
+                    await _js.InvokeVoidAsync("closeSidebar");
+                }
+                catch (JSDisconnectedException)
+                {
+                }
+            }
+        });
+
+    public async ValueTask DisposeAsync()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        if (_js is not null)
+        {
+            try
+            {
+                await _js.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+}

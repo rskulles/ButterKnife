@@ -1,0 +1,39 @@
+@* Settings page. The section list lives in SettingsLayout; this picks the section from the route.
+   "/connections" is kept so old bookmarks still land on the connections section. *@
+@page "/settings"
+@page "/settings/{Section}"
+@page "/connections"
+@layout SettingsLayout
+@inject NavigationManager Nav
+
+<PageTitle>@Title · Settings · ButterKnife</PageTitle>
+
+@switch (Current)
+{
+    case "general":
+        <GeneralSettings />
+        break;
+    case "connections":
+        <ConnectionsSettings />
+        break;
+    default:
+        <h1 class="h4">Not found</h1>
+        <p class="text-muted">There is no "@Section" section. Pick one on the left.</p>
+        break;
+}
+
+@code {
+    [Parameter] public string? Section { get; set; }
+
+    private string Current =>
+        Nav.ToBaseRelativePath(Nav.Uri).TrimEnd('/').Equals("connections", StringComparison.OrdinalIgnoreCase)
+            ? "connections"
+            : (Section ?? "general").ToLowerInvariant();
+
+    private string Title => Current switch
+    {
+        "general" => "General",
+        "connections" => "Connections",
+        _ => "Not found",
+    };
+}

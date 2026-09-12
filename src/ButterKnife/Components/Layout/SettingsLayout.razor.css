@@ -1,0 +1,17 @@
+/* NavLink renders the anchor, so reach it with ::deep. */
+nav ::deep .nav-link {
+    min-width: 0;
+}
+
+/* Phone: the collapse sits under the brand bar; separate it from the page below. Wide screens have the sidebar's
+   right border instead, and min-height 0 lets the list scroll inside the flex column. */
+.settings-nav {
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
+@media (min-width: 768px) {
+    .settings-nav {
+        border-bottom: 0;
+        min-height: 0;
+    }
+}

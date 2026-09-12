@@ -481,8 +481,10 @@ $RECYCLE.BIN/
 # Vim temporary swap files
 *.swp
 
-# ButterKnife runtime data (SQLite conversation store)
-src/ButterKnife/data/
+# ButterKnife runtime data (SQLite conversation store). Matched by file, not by folder: on case-insensitive
+# filesystems "data/" is the same directory as the "Data/" source folder and a folder rule would hide new .cs files.
+src/ButterKnife/data/*.db
+src/ButterKnife/data/*.db-*
 
 # Client-side libraries are restored by LibMan (libman.json) at build time
 src/ButterKnife/wwwroot/lib/

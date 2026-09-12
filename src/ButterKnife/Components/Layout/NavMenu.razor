@@ -5,7 +5,7 @@
 @inject IJSRuntime JS
 
 @* The sidebar follows the page colour mode. On phones everything below the brand bar is a collapse; inside it the
-   conversation list scrolls and a footer (Connections link, colour-mode toggle) stays pinned at the bottom. *@
+   conversation list scrolls and a footer (Settings link, colour-mode toggle) stays pinned at the bottom. *@
 <div class="d-flex flex-column flex-grow-1 overflow-hidden">
     <div class="navbar px-3 border-bottom flex-shrink-0" style="min-height: 3.5rem">
         <a class="navbar-brand fw-semibold text-body" href="">ButterKnife</a>
@@ -62,8 +62,8 @@
 
             <div class="d-flex align-items-center justify-content-between gap-2 p-2 border-top flex-shrink-0">
                 <nav class="nav nav-pills">
-                    <NavLink class="nav-link text-nowrap px-2 py-1" href="connections">
-                        <i class="bi bi-hdd-network me-2" aria-hidden="true"></i>Connections
+                    <NavLink class="nav-link text-nowrap px-2 py-1" href="settings" Match="NavLinkMatch.Prefix">
+                        <i class="bi bi-gear me-2" aria-hidden="true"></i>Settings
                     </NavLink>
                 </nav>
                 <div class="flex-shrink-0"><ThemeToggle /></div>

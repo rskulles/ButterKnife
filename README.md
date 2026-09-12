@@ -10,6 +10,8 @@ image attachments, dictates prompts through a local Whisper server, and keeps ev
 
 - **Connections** managed in the UI with presets for Ollama, LM Studio, generic OpenAI-compatible servers, Anthropic,
   and Whisper speech-to-text. API keys are encrypted at rest. Add a server, press Test, pick a model.
+- **Settings** page (General, Connections) that takes over the whole window; General sets the name shown above your
+  messages, stored server-side so every device shows it.
 - **Streaming chat** with markdown rendering, a stop button, and a stats line (time to first token, prompt tokens and
   rate, generation rate) under each reply.
 - **Personas**: named system prompts (Assistant, Programmer, Lawyer, Doctor, Writer, Teacher, Analyst are built in),
@@ -31,7 +33,7 @@ Requires the .NET 10 SDK.
 dotnet run --project src/ButterKnife
 ```
 
-Open <http://localhost:5175>, go to **Connections**, and add your servers with the preset buttons. To reach the app
+Open <http://localhost:5175>, go to **Settings → Connections**, and add your servers with the preset buttons. To reach the app
 from other devices on your network:
 
 ```bash
@@ -67,14 +69,15 @@ the app. Run it as another user or on another machine and stored keys read back 
 ```
 src/ButterKnife/
   Components/Pages/      Chat.razor (markup + code in one file, sectioned by comment banners),
-                         Connections (.razor + .razor.cs)
-  Components/Shared/     ButterKnifeThrobber (the knife + stats readout)
-  Components/Layout/     NavMenu (conversation list), MainLayout
+                         Settings.razor (/settings, /settings/{section}; /connections still works)
+  Components/Settings/   GeneralSettings, ConnectionsSettings (.razor + .razor.cs): the sections
+  Components/Shared/     ButterKnifeThrobber (the sprite + stats readout), ThemeToggle
+  Components/Layout/     MainLayout + NavMenu (conversation list), SettingsLayout (section list)
   Services/              ILlmClient + OllamaClient / OpenAiCompatibleClient / AnthropicLlmClient,
                          LlmClientRegistry, ModelCatalog, ConversationCompactor, TokenEstimator,
                          TranscriptionClient/Service, MarkdownRenderer, ConnectionPresets, DI extensions
   Data/                  SqliteDatabase (schema, migrations, seeding) and the stores:
-                         conversations, personas, connections; in-process change events
+                         conversations, personas, connections, settings; in-process change events
   Options/               LlmOptions, DictationOptions, DatabaseOptions
 tests/ButterKnife.Tests/ xUnit; HTTP clients are tested against a stub HttpMessageHandler, stores against temp SQLite files
 tools/stub-llm-server.py Fake Ollama / OpenAI / Anthropic / whisper.cpp server for offline development

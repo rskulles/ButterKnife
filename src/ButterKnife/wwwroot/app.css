@@ -1,6 +1,39 @@
 /* App-wide tweaks on top of the Bootstrap theme. Colours come from Bootstrap's CSS variables so light and dark
    modes (data-bs-theme on <html>, set by the theme script in App.razor) both work. */
 
+/* Page frame shared by MainLayout and SettingsLayout, sized with flex instead of hard-coded heights: the page fills
+   the viewport, the sidebar and main column are flex columns, and scrolling happens inside panes. The sidebar uses
+   the same surface as bg-body-tertiary so it follows the colour mode. */
+.page {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+.page > main {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.sidebar {
+    background-color: var(--bs-tertiary-bg);
+    display: flex;
+    flex-direction: column;
+}
+
+@media (min-width: 768px) {
+    .page {
+        flex-direction: row;
+    }
+
+    .sidebar {
+        width: 250px;
+        border-right: 1px solid var(--bs-border-color);
+    }
+}
+
 .content {
     padding-top: 1.1rem;
 }

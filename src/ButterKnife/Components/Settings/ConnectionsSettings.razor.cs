@@ -4,10 +4,10 @@ using ButterKnife.Options;
 using ButterKnife.Services;
 using Microsoft.AspNetCore.Components;
 
-namespace ButterKnife.Components.Pages;
+namespace ButterKnife.Components.Settings;
 
-/// <summary>Connections page: list, presets, add/edit form, and the Test probe. Markup is in <c>Connections.razor</c>.</summary>
-public partial class Connections : IDisposable
+/// <summary>Connections section of Settings: list, presets, add/edit form, and the Test probe. Markup is in <c>ConnectionsSettings.razor</c>.</summary>
+public partial class ConnectionsSettings : IDisposable
 {
     [Inject] private IConnectionStore Store { get; set; } = default!;
     [Inject] private ConnectionEvents Events { get; set; } = default!;

@@ -18,6 +18,8 @@
 @inject IOptions<DictationOptions> DictationOptions
 @inject ConversationCompactor Compactor
 @inject TranscriptionService Transcription
+@inject ISettingsStore Settings
+@inject SettingsEvents SettingsEvents
 
 <PageTitle>@(_title is null ? "ButterKnife" : $"{_title} · ButterKnife")</PageTitle>
 
@@ -91,7 +93,7 @@
                 class="mb-3 msg-@turn.Role.ToString().ToLowerInvariant() @(turn.Role == ChatRole.User ? "ms-auto" : "")"
                 style="max-width: 85%">
                 <div
-                    class="small text-uppercase text-body-secondary @(turn.Role == ChatRole.User ? "text-end" : "")">@turn.Role</div>
+                    class="small text-uppercase text-body-secondary @(turn.Role == ChatRole.User ? "text-end" : "")">@(turn.Role == ChatRole.User ? _displayName : "Assistant")</div>
                 @if (turn.Role == ChatRole.Assistant)
                 {
                     <div
@@ -341,7 +343,8 @@
         _autoSend = DictationOptions.Value.AutoSendAfterTranscription;
         ConnectionEvents.Changed += OnConnectionsChanged;
         Events.Changed += OnConversationsChanged;
-        await Task.WhenAll(RefreshModelsAsync(), LoadPersonasAsync());
+        SettingsEvents.Changed += OnSettingsChanged;
+        await Task.WhenAll(RefreshModelsAsync(), LoadPersonasAsync(), LoadDisplayNameAsync());
 
         // First visit to "/": OnParametersSetAsync returns early (null id == null current id), so apply the default
         // persona and probe the default model here.
@@ -351,6 +354,31 @@
             _ = RefreshContextWindowAsync();
         }
     }
+
+    /// <summary>Label above the user's messages (Settings → General); app-wide, so other circuits are told when it changes.</summary>
+    private string _displayName = SettingKeys.DefaultUserDisplayName;
+
+    private async Task LoadDisplayNameAsync()
+    {
+        try
+        {
+            _displayName = await Settings.GetAsync(SettingKeys.UserDisplayName, _disposed.Token) ?? SettingKeys.DefaultUserDisplayName;
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            // cosmetic; keep the default
+        }
+    }
+
+    private void OnSettingsChanged() =>
+        _ = InvokeAsync(async () =>
+        {
+            await LoadDisplayNameAsync();
+            StateHasChanged();
+        });
 
     private async Task LoadPersonasAsync()
     {
@@ -744,6 +772,7 @@
     {
         ConnectionEvents.Changed -= OnConnectionsChanged;
         Events.Changed -= OnConversationsChanged;
+        SettingsEvents.Changed -= OnSettingsChanged;
         if (_js is not null && _dictation == DictationState.Recording)
         {
             try

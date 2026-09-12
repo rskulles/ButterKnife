@@ -124,6 +124,12 @@ public sealed class SqliteDatabase
                 );
 
                 CREATE INDEX IF NOT EXISTS ix_message_images_message ON message_images(message_id);
+
+                CREATE TABLE IF NOT EXISTS settings (
+                    key        TEXT PRIMARY KEY,
+                    value      TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """, cancellationToken);
 
             // Databases created before these columns existed.
