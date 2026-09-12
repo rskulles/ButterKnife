@@ -18,4 +18,7 @@ public static class SettingKeys
     public const string DefaultUserDisplayName = "User";
 
     public const int MaxUserDisplayNameLength = 40;
+
+    /// <summary>"true" to listen on all interfaces so phones and other devices can reach the app; "false" for localhost only. Applied at startup.</summary>
+    public const string ListenOnLan = "server.listen_on_lan";
 }

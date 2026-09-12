@@ -1,7 +1,11 @@
-@* General section: how the user is named in the transcript. Stored app-wide (one SQLite row), so every device sees it. *@
+@* General section: the user's name in the transcript and whether the server listens beyond localhost.
+   Both are app-wide rows in the settings table. The network switch is read by Program.cs at startup, so the page
+   compares it with what the server is actually bound to and says when a restart is needed. *@
 @implements IDisposable
 @inject ISettingsStore Settings
 @inject SettingsEvents Events
+@inject LanAddressService Lan
+@inject NavigationManager Nav
 
 <h1 class="h4">General</h1>
 <p class="text-muted">Applies to everyone who opens this ButterKnife, on any device.</p>
@@ -26,6 +30,32 @@
         {
             <div class="small @(_ok ? "text-success" : "text-danger")" role="status">@_message</div>
         }
+
+        <hr class="my-4" />
+
+        <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" role="switch" id="listen-on-lan" checked="@_listenOnLan"
+                   @onchange="e => SetListenOnLanAsync((bool)e.Value!)" disabled="@_busy" />
+            <label class="form-check-label" for="listen-on-lan">Reachable from other devices on the local network</label>
+        </div>
+        <div class="form-text">
+            On: ButterKnife listens on every network interface so a phone or another computer on the same Wi‑Fi can open it
+            (use "Open on phone" in a chat for a QR code). Off: only this computer can reach it.
+        </div>
+        <div class="small mt-2" role="status">
+            @if (_listenOnLan == _access.ListensOnLan)
+            {
+                <span class="text-body-secondary">Currently @(_access.ListensOnLan ? "reachable on the local network" : "localhost only").</span>
+                @if (_access.ListensOnLan && _access.Urls.Count > 0)
+                {
+                    <span class="text-body-secondary"> Address for other devices: </span><code class="user-select-all">@_access.Urls[0]</code>
+                }
+            }
+            else
+            {
+                <span class="text-warning-emphasis"><i class="bi bi-arrow-repeat me-1" aria-hidden="true"></i>Restart ButterKnife to apply. It is currently @(_access.ListensOnLan ? "reachable on the local network" : "localhost only").</span>
+            }
+        </div>
     </div>
 </div>
 
@@ -35,6 +65,9 @@
     private string? _message;
     private bool _ok;
     private bool _busy;
+
+    private bool _listenOnLan;
+    private PhoneAccess _access = new(false, []);
 
     private bool Dirty => !string.Equals(_name.Trim(), _saved, StringComparison.Ordinal);
 
@@ -50,6 +83,30 @@
     {
         _saved = await Settings.GetAsync(SettingKeys.UserDisplayName) ?? "";
         _name = _saved;
+
+        // The root page URL stands in for "the app": only the host and port matter here.
+        _access = Lan.ForPage(new Uri(Nav.BaseUri));
+        _listenOnLan = await Settings.GetAsync(SettingKeys.ListenOnLan) is { } saved ? saved == "true" : _access.ListensOnLan;
+    }
+
+    private async Task SetListenOnLanAsync(bool on)
+    {
+        _busy = true;
+        try
+        {
+            await Settings.SetAsync(SettingKeys.ListenOnLan, on ? "true" : "false");
+            _listenOnLan = on;
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _ok = false;
+            _message = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
     }
 
     private void OnChanged() => _ = InvokeAsync(async () =>

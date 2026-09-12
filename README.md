@@ -11,7 +11,10 @@ image attachments, dictates prompts through a local Whisper server, and keeps ev
 - **Connections** managed in the UI with presets for Ollama, LM Studio, generic OpenAI-compatible servers, Anthropic,
   and Whisper speech-to-text. API keys are encrypted at rest. Add a server, press Test, pick a model.
 - **Settings** page (General, Connections) that takes over the whole window; General sets the name shown above your
-  messages, stored server-side so every device shows it.
+  messages and whether the app is reachable from other devices on the local network (applied on restart), both stored
+  server-side so every device sees them.
+- **Open on phone**: a button on desktop-sized screens shows a QR code that opens the current chat on a phone on the
+  same Wi‑Fi.
 - **Streaming chat** with markdown rendering, a stop button, and a stats line (time to first token, prompt tokens and
   rate, generation rate) under each reply.
 - **Personas**: named system prompts (Assistant, Programmer, Lawyer, Doctor, Writer, Teacher, Analyst, Product
@@ -34,7 +37,8 @@ dotnet run --project src/ButterKnife
 ```
 
 Open <http://localhost:5175>, go to **Settings → Connections**, and add your servers with the preset buttons. To reach the app
-from other devices on your network:
+from other devices on your network, turn on **Reachable from other devices on the local network** under **Settings →
+General** and restart, or start it bound to all interfaces once:
 
 ```bash
 dotnet run --project src/ButterKnife --urls http://0.0.0.0:5175

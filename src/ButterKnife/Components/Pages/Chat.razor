@@ -25,6 +25,7 @@
 
 <div class="chat-frame d-flex flex-column gap-2 flex-grow-1">
     <header class="d-flex flex-wrap align-items-center gap-2">
+        <PhoneLink />
         <label class="visually-hidden" for="persona-select">Persona</label>
         <select id="persona-select" class="form-select form-select-sm w-auto ms-auto"
                 value="@_personaKey" @onchange="OnPersonaChangedAsync" disabled="@_isStreaming"

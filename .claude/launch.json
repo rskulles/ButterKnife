@@ -4,7 +4,13 @@
     {
       "name": "butterknife",
       "runtimeExecutable": "dotnet",
-      "runtimeArgs": ["run", "--project", "src/ButterKnife", "--launch-profile", "http"],
+      "runtimeArgs": [
+        "run",
+        "--project",
+        "src/ButterKnife",
+        "--launch-profile",
+        "http"
+      ],
       "port": 5175
     },
     {
@@ -14,9 +20,30 @@
         "ASPNETCORE_ENVIRONMENT=Development",
         "Llm__Backends__0__BaseUrl=http://127.0.0.1:11434",
         "Llm__Backends__1__BaseUrl=http://127.0.0.1:11434/v1",
-        "dotnet", "run", "--project", "src/ButterKnife", "--no-launch-profile", "--urls", "http://localhost:5176"
+        "dotnet",
+        "run",
+        "--project",
+        "src/ButterKnife",
+        "--no-launch-profile",
+        "--urls",
+        "http://localhost:5176"
       ],
       "port": 5176
+    },
+    {
+      "name": "butterknife-lan",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "ASPNETCORE_ENVIRONMENT=Development",
+        "dotnet",
+        "run",
+        "--project",
+        "src/ButterKnife",
+        "--no-launch-profile",
+        "--urls",
+        "http://0.0.0.0:5175"
+      ],
+      "port": 5175
     }
   ]
 }

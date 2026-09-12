@@ -1,0 +1,93 @@
+@* "Open on your phone": a QR code for this page at a LAN address. Hidden on phone-sized screens (d-md-*) since
+   there is nothing to hand off to. The modal is plain Bootstrap markup toggled from C#; no JS needed. *@
+@using QRCoder
+@inject NavigationManager Nav
+@inject LanAddressService Lan
+
+<button type="button" class="btn btn-sm btn-outline-secondary d-none d-md-inline-flex align-items-center gap-1"
+        @onclick="Open" title="Show a QR code that opens this chat on your phone">
+    <i class="bi bi-qr-code" aria-hidden="true"></i>Open on phone
+</button>
+
+@if (_access is not null)
+{
+    <div class="modal d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="phone-link-title" @onclick="Close">
+        <div class="modal-dialog modal-dialog-centered" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="phone-link-title">Open on your phone</h2>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="Close"></button>
+                </div>
+                <div class="modal-body">
+                    @if (!_access.ListensOnLan)
+                    {
+                        <div class="alert alert-warning small" role="alert">
+                            This ButterKnife is only listening on this computer, so a phone cannot reach it yet.
+                            Turn on <a href="settings">Reachable from other devices on the local network</a> in Settings and restart.
+                        </div>
+                    }
+                    @if (_selected is null)
+                    {
+                        <p class="text-body-secondary mb-0">No network address was found on this computer.</p>
+                    }
+                    else
+                    {
+                        <div class="d-flex flex-column align-items-center gap-3">
+                            <div class="bg-white p-2 rounded" style="width: 16rem; max-width: 100%">
+                                @_svg
+                            </div>
+                            <code class="text-break user-select-all">@_selected</code>
+                            @if (_access.Urls.Count > 1)
+                            {
+                                <div class="w-100">
+                                    <label class="form-label small mb-1" for="phone-link-address">Address to encode</label>
+                                    <select id="phone-link-address" class="form-select form-select-sm"
+                                            value="@_selected" @onchange="e => Select(e.Value?.ToString())">
+                                        @foreach (var url in _access.Urls)
+                                        {
+                                            <option value="@url">@url.Host</option>
+                                        }
+                                    </select>
+                                </div>
+                            }
+                        </div>
+                    }
+                    <p class="small text-body-secondary mt-3 mb-0">
+                        Scan with the phone's camera on the same Wi‑Fi. You land in this chat, with the same conversations and
+                        connections as here. Photos attach from the phone's camera or library; dictation needs https and is not
+                        available there.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop show"></div>
+}
+
+@code {
+    private PhoneAccess? _access;
+    private Uri? _selected;
+    private MarkupString _svg;
+
+    private void Open()
+    {
+        _access = Lan.ForPage(new Uri(Nav.Uri));
+        Select(_access.Urls.FirstOrDefault()?.ToString());
+    }
+
+    private void Close() => _access = null;
+
+    private void Select(string? url)
+    {
+        _selected = url is null ? null : new Uri(url);
+        _svg = _selected is null ? default : (MarkupString)RenderQr(_selected.ToString());
+    }
+
+    /// <summary>SVG with a viewBox so CSS decides the size; black on white for scanner contrast in either colour mode.</summary>
+    private static string RenderQr(string text)
+    {
+        using var generator = new QRCodeGenerator();
+        using var data = generator.CreateQrCode(text, QRCodeGenerator.ECCLevel.M);
+        return new SvgQRCode(data).GetGraphic(4, "#000000", "#ffffff", drawQuietZones: true, sizingMode: SvgQRCode.SizingMode.ViewBoxAttribute);
+    }
+}
