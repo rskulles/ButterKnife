@@ -4,3 +4,17 @@
 nav ::deep .nav-link {
     min-width: 0;
 }
+
+/* On phones the list is a collapse under the brand bar; separate it from the page below. Wide screens have the
+   sidebar's right border instead (MainLayout.razor.css). */
+#sidebar-nav {
+    border-bottom: 1px solid var(--bs-border-color);
+}
+
+@media (min-width: 768px) {
+    /* Wide screens: the collapse is a plain flex child of the sidebar; min-height 0 lets the list inside it scroll. */
+    #sidebar-nav {
+        border-bottom: 0;
+        min-height: 0;
+    }
+}

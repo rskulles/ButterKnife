@@ -4,62 +4,71 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 
-@* data-bs-theme="dark" makes Bootstrap render links, buttons and inputs for the dark sidebar in either colour mode. *@
-<div data-bs-theme="dark" class="d-flex flex-column flex-grow-1 overflow-hidden">
-    <div class="navbar navbar-dark px-3 bg-black bg-opacity-25 flex-shrink-0" style="min-height: 3.5rem">
-        <a class="navbar-brand" href="">ButterKnife</a>
+@* The sidebar follows the page colour mode. On phones everything below the brand bar is a collapse; inside it the
+   conversation list scrolls and a footer (Connections link, colour-mode toggle) stays pinned at the bottom. *@
+<div class="d-flex flex-column flex-grow-1 overflow-hidden">
+    <div class="navbar px-3 border-bottom flex-shrink-0" style="min-height: 3.5rem">
+        <a class="navbar-brand fw-semibold text-body" href="">ButterKnife</a>
         <button class="navbar-toggler d-md-none" type="button" data-bs-toggle="collapse" data-bs-target="#sidebar-nav"
                 aria-controls="sidebar-nav" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
         </button>
     </div>
 
-    <div class="collapse d-md-block flex-grow-1 overflow-auto" id="sidebar-nav">
-        <nav class="nav nav-pills flex-column flex-nowrap gap-1 p-2">
-            <NavLink class="nav-link text-nowrap" href="" Match="NavLinkMatch.All">
-                <i class="bi bi-plus-square-fill me-2" aria-hidden="true"></i>New chat
-            </NavLink>
-            <NavLink class="nav-link text-nowrap" href="connections">
-                <i class="bi bi-hdd-network me-2" aria-hidden="true"></i>Connections
-            </NavLink>
+    <div class="collapse d-md-block flex-grow-1" id="sidebar-nav">
+        <div class="d-flex flex-column h-100">
+            <nav class="nav nav-pills flex-column flex-nowrap gap-1 p-2 flex-grow-1 overflow-auto">
+                <NavLink class="nav-link text-nowrap" href="" Match="NavLinkMatch.All">
+                    <i class="bi bi-plus-square-fill me-2" aria-hidden="true"></i>New chat
+                </NavLink>
 
-            @foreach (var c in _conversations)
-            {
-                <div class="d-flex align-items-center">
-                    @if (_pendingDelete == c.Id)
-                    {
-                        <span class="d-flex align-items-center gap-2 w-100 px-2 small" role="alertdialog" aria-label="Delete this chat?">
-                            <span class="flex-grow-1">Delete?</span>
-                            <button type="button" class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(c.Id)">Delete</button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelDelete">Keep</button>
-                        </span>
-                    }
-                    else if (_renaming == c.Id)
-                    {
-                        <span class="d-flex align-items-center gap-2 w-100 px-2" role="group" aria-label="Rename chat">
-                            <input class="form-control form-control-sm" @bind="_renameText" @bind:event="oninput"
-                                   @onkeydown="e => OnRenameKeyAsync(e, c.Id)" aria-label="Chat title" />
-                            <button type="button" class="btn btn-sm btn-primary" @onclick="() => RenameAsync(c.Id)" disabled="@string.IsNullOrWhiteSpace(_renameText)">Save</button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelRename">Cancel</button>
-                        </span>
-                    }
-                    else
-                    {
-                        <NavLink class="nav-link flex-grow-1 text-truncate small" href="@($"chat/{c.Id}")" title="@c.Title">
-                            <i class="bi bi-chat-left-text me-2" aria-hidden="true"></i>@c.Title
-                        </NavLink>
-                        <button type="button" class="btn btn-sm btn-link text-body-secondary p-1" title="Rename chat" aria-label="Rename chat"
-                                @onclick="() => BeginRename(c)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                        <button type="button" class="btn btn-sm btn-link text-body-secondary p-1" title="Delete chat" aria-label="Delete chat"
-                                @onclick="() => _pendingDelete = c.Id"><i class="bi bi-trash" aria-hidden="true"></i></button>
-                    }
-                </div>
-            }
-            @if (_renameError is not null)
-            {
-                <div class="px-2 small text-warning">@_renameError</div>
-            }
-        </nav>
+                @foreach (var c in _conversations)
+                {
+                    <div class="d-flex align-items-center">
+                        @if (_pendingDelete == c.Id)
+                        {
+                            <span class="d-flex align-items-center gap-2 w-100 px-2 small" role="alertdialog" aria-label="Delete this chat?">
+                                <span class="flex-grow-1">Delete?</span>
+                                <button type="button" class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(c.Id)">Delete</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelDelete">Keep</button>
+                            </span>
+                        }
+                        else if (_renaming == c.Id)
+                        {
+                            <span class="d-flex align-items-center gap-2 w-100 px-2" role="group" aria-label="Rename chat">
+                                <input class="form-control form-control-sm" @bind="_renameText" @bind:event="oninput"
+                                       @onkeydown="e => OnRenameKeyAsync(e, c.Id)" aria-label="Chat title" />
+                                <button type="button" class="btn btn-sm btn-primary" @onclick="() => RenameAsync(c.Id)" disabled="@string.IsNullOrWhiteSpace(_renameText)">Save</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelRename">Cancel</button>
+                            </span>
+                        }
+                        else
+                        {
+                            <NavLink class="nav-link flex-grow-1 text-truncate small" href="@($"chat/{c.Id}")" title="@c.Title">
+                                <i class="bi bi-chat-left-text me-2" aria-hidden="true"></i>@c.Title
+                            </NavLink>
+                            <button type="button" class="btn btn-sm btn-link text-body-secondary p-1" title="Rename chat" aria-label="Rename chat"
+                                    @onclick="() => BeginRename(c)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                            <button type="button" class="btn btn-sm btn-link text-body-secondary p-1" title="Delete chat" aria-label="Delete chat"
+                                    @onclick="() => _pendingDelete = c.Id"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                        }
+                    </div>
+                }
+                @if (_renameError is not null)
+                {
+                    <div class="px-2 small text-warning">@_renameError</div>
+                }
+            </nav>
+
+            <div class="d-flex align-items-center justify-content-between gap-2 p-2 border-top flex-shrink-0">
+                <nav class="nav nav-pills">
+                    <NavLink class="nav-link text-nowrap px-2 py-1" href="connections">
+                        <i class="bi bi-hdd-network me-2" aria-hidden="true"></i>Connections
+                    </NavLink>
+                </nav>
+                <div class="flex-shrink-0"><ThemeToggle /></div>
+            </div>
+        </div>
     </div>
 </div>
 
