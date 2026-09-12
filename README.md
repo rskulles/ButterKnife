@@ -14,8 +14,8 @@ image attachments, dictates prompts through a local Whisper server, and keeps ev
   messages, stored server-side so every device shows it.
 - **Streaming chat** with markdown rendering, a stop button, and a stats line (time to first token, prompt tokens and
   rate, generation rate) under each reply.
-- **Personas**: named system prompts (Assistant, Programmer, Lawyer, Doctor, Writer, Teacher, Analyst are built in),
-  chosen per conversation.
+- **Personas**: named system prompts (Assistant, Programmer, Lawyer, Doctor, Writer, Teacher, Analyst, Product
+  Describer, Copywriter are built in), chosen per conversation.
 - **Images**: attach up to six per message; sent in each backend's native encoding for vision models.
 - **Context meter** showing how much of the model's window the conversation uses, and **compaction** that summarises
   older turns so long chats keep fitting, on demand or automatically.
