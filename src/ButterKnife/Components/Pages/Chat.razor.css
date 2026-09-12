@@ -12,6 +12,42 @@
     min-height: 0;
 }
 
+/* A transcript entry hugs its content instead of stretching to the cap, so short messages get small bubbles.
+   ms-auto on user entries keeps them right-aligned; the label and stats line inside follow the bubble's width. */
+.msg {
+    width: fit-content;
+    max-width: 85%;
+}
+
+/* The bubble hugs its text as well, so a stats line wider than a short reply does not stretch the bubble.
+   The speech-bubble tail is a small triangle hanging off the bottom corner nearest the speaker; it inherits the
+   bubble's background so it follows the colour mode. The bottom margin makes room for it. */
+.msg-bubble {
+    position: relative;
+    width: fit-content;
+    max-width: 100%;
+    margin-bottom: 0.75rem;
+}
+
+.msg-bubble::after {
+    content: "";
+    position: absolute;
+    bottom: -0.7rem;
+    width: 1.25rem;
+    height: 0.75rem;
+    background: inherit;
+}
+
+.msg-assistant .msg-bubble::after {
+    left: 0.75rem;
+    clip-path: polygon(0 0, 100% 0, 0 100%);
+}
+
+.msg-user .msg-bubble::after {
+    right: 0.75rem;
+    clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
 .msg-image {
     max-height: 12rem;
     cursor: zoom-in;

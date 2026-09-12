@@ -59,12 +59,12 @@
         </div>
     }
 
-    <div class="chat-messages overflow-auto p-2 border rounded bg-body" @ref="_messagesElement">
+    <div class="chat-messages overflow-auto p-2 border bg-body" @ref="_messagesElement">
         @if (_turns.Count == 0)
         {
             @if (!_loadingModels && _models.Count == 0 && _backendErrors.Count == 0)
             {
-                <p class="text-center text-body-secondary mt-5">No LLM connections yet. <a href="connections">Add a connection</a> to get started.</p>
+                <p class="text-center text-body-secondary mt-5">No LLM connections yet. <a href="settings/connections">Add a connection</a> to get started.</p>
             }
             else
             {
@@ -89,15 +89,13 @@
                 </div>
             }
 
-            <div
-                class="mb-3 msg-@turn.Role.ToString().ToLowerInvariant() @(turn.Role == ChatRole.User ? "ms-auto" : "")"
-                style="max-width: 85%">
+            <div class="msg mb-3 msg-@turn.Role.ToString().ToLowerInvariant() @(turn.Role == ChatRole.User ? "ms-auto" : "")">
                 <div
                     class="small text-uppercase text-body-secondary @(turn.Role == ChatRole.User ? "text-end" : "")">@(turn.Role == ChatRole.User ? _displayName : "Assistant")</div>
                 @if (turn.Role == ChatRole.Assistant)
                 {
                     <div
-                        class="msg-markdown px-3 py-2 rounded-3 bg-body-tertiary text-break">@turn.Html@(turn.IsStreaming ? "▍" : "")</div>
+                        class="msg-bubble msg-markdown px-3 py-2 rounded-3 bg-body-tertiary text-break">@turn.Html@(turn.IsStreaming ? "▍" : "")</div>
                     @if (turn.IsStreaming)
                     {
                         <ButterKnifeThrobber Stats="turn.GetStats"/>
@@ -110,7 +108,7 @@
                 }
                 else
                 {
-                    <div class="px-3 py-2 rounded-3 bg-primary-subtle prewrap text-break">
+                    <div class="msg-bubble ms-auto px-3 py-2 rounded-3 bg-primary-subtle prewrap text-break">
                         @if (turn.Images.Count > 0)
                         {
                             <div class="d-flex flex-wrap gap-2 mb-2">
