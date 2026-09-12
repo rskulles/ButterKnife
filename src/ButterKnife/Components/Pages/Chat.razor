@@ -221,8 +221,9 @@
             <div class="input-group input-group-sm position-relative">
 
                 <label class="visually-hidden" for="model-select">Model</label>
+                @* While the list is empty the saved key matches no option, so bind the placeholder instead of a blank. *@
                 <select id="model-select" class="form-select"
-                        value="@_selectedKey" @onchange="OnModelChanged" disabled="@_isStreaming">
+                        value="@(_models.Count == 0 ? "" : _selectedKey)" @onchange="OnModelChanged" disabled="@_isStreaming">
                     @if (_models.Count == 0)
                     {
                         <option value="">@(_loadingModels ? "Loading models…" : "No models available")</option>
@@ -343,16 +344,24 @@
         ConnectionEvents.Changed += OnConnectionsChanged;
         Events.Changed += OnConversationsChanged;
         SettingsEvents.Changed += OnSettingsChanged;
-        await Task.WhenAll(RefreshModelsAsync(), LoadPersonasAsync(), LoadDisplayNameAsync());
 
-        // First visit to "/": OnParametersSetAsync returns early (null id == null current id), so apply the default
-        // persona and probe the default model here.
+        // Local data first so the page renders at once; the model list can take a while when a connection is down,
+        // so it loads in the background and ReconcileSelection applies the saved model when it arrives.
+        await Task.WhenAll(LoadPersonasAsync(), LoadDisplayNameAsync());
+        _ = RefreshModelsInBackgroundAsync();
+
+        // First visit to "/": OnParametersSetAsync returns early (null id == null current id), so apply the default persona here.
         if (Id is null)
         {
             _personaKey = DefaultPersonaKey();
-            _ = RefreshContextWindowAsync();
         }
     }
+
+    private Task RefreshModelsInBackgroundAsync() => InvokeAsync(async () =>
+    {
+        await RefreshModelsAsync();
+        StateHasChanged();
+    });
 
     /// <summary>Label above the user's messages (Settings → General); app-wide, so other circuits are told when it changes.</summary>
     private string _displayName = SettingKeys.DefaultUserDisplayName;
@@ -451,16 +460,10 @@
             _turns.Add(new ChatTurn(message.Role, message.Content, Markdown, message.Images));
         }
 
-        var savedKey = ModelDescriptor.MakeKey(conversation.ConnectionId, conversation.Model);
-        if (_models.Any(m => m.Key == savedKey))
-        {
-            _selectedKey = savedKey;
-        }
-        else if (_models.Count > 0)
-        {
-            _error = $"Model {conversation.Model} is no longer available on its connection; pick another to continue.";
-        }
-
+        // The saved model is selected even before the model list has arrived; ReconcileSelection (now, or when the
+        // list lands) swaps in the default with a note if it no longer exists.
+        _selectedKey = ModelDescriptor.MakeKey(conversation.ConnectionId, conversation.Model);
+        ReconcileSelection();
         _ = RefreshContextWindowAsync();
     }
 
@@ -493,11 +496,8 @@
             var result = await Catalog.GetModelsAsync(_disposed.Token);
             _models = result.Models.ToList();
             _backendErrors = result.BackendErrors;
-
-            if (Selected is null)
-            {
-                _selectedKey = PickDefault()?.Key ?? "";
-            }
+            ReconcileSelection();
+            _ = RefreshContextWindowAsync();
         }
         catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
         {
@@ -513,6 +513,26 @@
     }
 
     private ModelDescriptor? PickDefault() => _models.FirstOrDefault(m => m.IsDefault) ?? _models.FirstOrDefault();
+
+    /// <summary>
+    /// Once the model list is known, make sure the selection points at a real model: a conversation's saved model
+    /// that is gone (connection deleted, model removed) falls back to the default with a note; an empty selection
+    /// just takes the default. Does nothing while the list is still loading.
+    /// </summary>
+    private void ReconcileSelection()
+    {
+        if (_models.Count == 0 || Selected is not null)
+        {
+            return;
+        }
+
+        if (_selectedKey.Length > 0)
+        {
+            var model = _selectedKey[(_selectedKey.IndexOf("::", StringComparison.Ordinal) + 2)..];
+            _error = $"Model {model} is no longer available on its connection; pick another to continue.";
+        }
+        _selectedKey = PickDefault()?.Key ?? "";
+    }
 
     private void OnConnectionsChanged() =>
         _ = InvokeAsync(async () =>
@@ -984,8 +1004,7 @@
 
         if (Selected is not { } model)
         {
-            _contextWindow = null;
-            return;
+            return; // nothing selected yet (list still loading, or no models); keep whatever the conversation saved
         }
 
         if (_windowCache.TryGetValue(model.Key, out var cached))
