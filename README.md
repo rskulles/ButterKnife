@@ -4,6 +4,8 @@ A self-hosted chat UI for the LLMs on your own network. Blazor Server, one SQLit
 Anthropic connection. Talks to Ollama, LM Studio and anything OpenAI-compatible, streams replies as markdown, takes
 image attachments, dictates prompts through a local Whisper server, and keeps every conversation.
 
+![A ButterKnife chat in dark mode: a conversation with an image attachment and the model's description of it](docs/screenshots/chat.png)
+
 ## Features
 
 - **Connections** managed in the UI with presets for Ollama, LM Studio, generic OpenAI-compatible servers, Anthropic,
