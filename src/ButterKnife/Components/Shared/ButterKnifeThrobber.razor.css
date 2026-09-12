@@ -1,24 +1,32 @@
-/* The knife's throb and spin. Everything else on the component is Bootstrap utilities. */
+/* The throbber sprite and its click-to-spin. Everything else on the component is Bootstrap utilities.
+   throbber.png is a horizontal strip of 56 frames, 32 x 32 px each (1792 x 32), shown at half size (16 px frames,
+   background-size 896 x 16); steps(56) shows one frame per step, so 56 frames over 56/24 s is 24 fps. Scoped CSS is bundled into /ButterKnife.styles.css at the site root, so the
+   url() is relative to wwwroot. The sprite sits on an inner span and the spin on the button so that a spin does
+   not restart the frame animation. */
 
-.knife-throb {
-    animation: knife-throb 1.1s ease-in-out infinite;
+.throbber {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    background: url("throbber.png") 0 0 / 896px 16px no-repeat;
+    animation: throbber-frames 2.3333s steps(56) infinite;
 }
 
-.knife-spin {
-    animation: knife-spin 0.75s cubic-bezier(0.3, 0.1, 0.25, 1) 1;
+.throbber-spin {
+    animation: throbber-spin 0.75s cubic-bezier(0.3, 0.1, 0.25, 1) 1;
 }
 
-@keyframes knife-throb {
-    0%, 100% { transform: scale(1); opacity: 0.75; }
-    50%      { transform: scale(1.18); opacity: 1; }
+@keyframes throbber-frames {
+    from { background-position-x: 0; }
+    to   { background-position-x: -896px; }
 }
 
-@keyframes knife-spin {
+@keyframes throbber-spin {
     from { transform: rotate(0deg) scale(1.1); }
     to   { transform: rotate(360deg) scale(1.1); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .knife-throb { animation: knife-fade 1.4s ease-in-out infinite; }
-    @keyframes knife-fade { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+    .throbber, .throbber-spin { animation: throbber-fade 1.4s ease-in-out infinite; }
+    @keyframes throbber-fade { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 }
