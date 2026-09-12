@@ -102,6 +102,15 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
         return null;
     }
 
+    /// <summary>/api/show lists "vision" in capabilities for multimodal models (Ollama 0.6+); older servers omit the array, which is "unknown".</summary>
+    public override async Task<bool?> SupportsImagesAsync(string model, CancellationToken cancellationToken = default)
+    {
+        var shown = await TryPostJsonAsync<ShowResponse, ShowRequest>("api/show", new ShowRequest(model), cancellationToken);
+        return shown?.Capabilities is { } capabilities
+            ? capabilities.Contains("vision", StringComparer.OrdinalIgnoreCase)
+            : null;
+    }
+
     private static TimeSpan? Nanos(long? nanoseconds) =>
         nanoseconds is > 0 ? TimeSpan.FromTicks(nanoseconds.Value / 100) : null;
 
@@ -134,7 +143,7 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
 
     private sealed record ShowRequest(string Model);
 
-    private sealed record ShowResponse([property: JsonPropertyName("model_info")] Dictionary<string, JsonElement>? ModelInfo);
+    private sealed record ShowResponse([property: JsonPropertyName("model_info")] Dictionary<string, JsonElement>? ModelInfo, string[]? Capabilities);
 
     private sealed record TagsResponse(ModelTag[] Models);
 

@@ -21,4 +21,7 @@ public interface ILlmClient
 
     /// <summary>The model's context window in tokens, or null when the backend cannot tell us. Never throws for "unknown".</summary>
     Task<int?> GetContextWindowAsync(string model, CancellationToken cancellationToken = default);
+
+    /// <summary>Whether the model accepts image input: true/false when the backend reports it, null when it cannot tell us. Never throws for "unknown".</summary>
+    Task<bool?> SupportsImagesAsync(string model, CancellationToken cancellationToken = default);
 }

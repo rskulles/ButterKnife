@@ -142,6 +142,9 @@ public sealed class AnthropicLlmClient : ILlmClient
         }
     }
 
+    /// <summary>Every current Claude model accepts images and the Models API has no capability field, so this is always true.</summary>
+    public Task<bool?> SupportsImagesAsync(string model, CancellationToken cancellationToken = default) => Task.FromResult<bool?>(true);
+
     public async Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken = default)
     {
         var ids = new List<string>();

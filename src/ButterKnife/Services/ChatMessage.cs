@@ -29,4 +29,22 @@ public sealed record ChatMessage(ChatRole Role, string Content, IReadOnlyList<Ch
     public IReadOnlyList<ChatImage> Images { get; init; } = Images ?? NoImages;
 
     public bool HasImages => Images.Count > 0;
+
+    /// <summary>
+    /// The same message with its images replaced by a note, for models that cannot see them. The stored
+    /// transcript keeps the images; only the request loses them.
+    /// </summary>
+    public ChatMessage WithImagesAsText()
+    {
+        if (!HasImages)
+        {
+            return this;
+        }
+
+        var note = Images.Count == 1
+            ? "[1 image was attached here but omitted: this model cannot see images.]"
+            : $"[{Images.Count} images were attached here but omitted: this model cannot see images.]";
+        var content = Content.Length == 0 ? note : $"{Content}\n\n{note}";
+        return new ChatMessage(Role, content);
+    }
 }

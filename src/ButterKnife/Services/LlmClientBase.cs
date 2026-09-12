@@ -35,6 +35,8 @@ public abstract class LlmClientBase(IHttpClientFactory httpClientFactory, LlmCon
 
     public abstract Task<int?> GetContextWindowAsync(string model, CancellationToken cancellationToken = default);
 
+    public abstract Task<bool?> SupportsImagesAsync(string model, CancellationToken cancellationToken = default);
+
     /// <summary>GET that returns null instead of throwing, for optional capability lookups.</summary>
     protected async Task<T?> TryGetJsonAsync<T>(string relativeUrl, CancellationToken cancellationToken) where T : class
     {

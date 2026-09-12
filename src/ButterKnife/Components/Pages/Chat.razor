@@ -155,6 +155,13 @@
             {
                 <div class="small text-danger">@_imageError</div>
             }
+            @if (ModelIsTextOnly && ImagesInContext is > 0 and var omitted)
+            {
+                <div class="small text-body-secondary">
+                    <i class="bi bi-eye-slash me-1" aria-hidden="true"></i>@Selected?.Model cannot see images: @omitted in this chat
+                    @(omitted == 1 ? "is" : "are") sent as a note instead. Pick a vision model to include @(omitted == 1 ? "it" : "them") again.
+                </div>
+            }
             @if (_dictationStatus is not null)
             {
                 <div class="small @(_dictationError ? "text-danger" : "text-body-secondary")">@_dictationStatus</div>
@@ -164,10 +171,10 @@
                       @bind="_input" @bind:event="oninput" disabled="@_isStreaming"></textarea>
         </div>
         <div class="d-flex align-items-center gap-lg-5 gap-md-5 gap-sm-2 justify-content-evenly">
-            <label class="btn btn-sm btn-outline-secondary @(_isStreaming ? "disabled" : "")"
-                   title="Attach images (JPEG, PNG, GIF, WebP)">
-                <i class="bi bi-plus-lg" aria-hidden="true"></i><span class="visually-hidden">Attach images</span>
-                <InputFile OnChange="@(OnFilesSelectedAsync)" multiple accept="image/*" disabled="@_isStreaming"
+            <label class="btn btn-sm btn-outline-secondary @(_isStreaming || ModelIsTextOnly ? "disabled" : "")"
+                   title="@AttachTitle">
+                <i class="bi @(ModelIsTextOnly ? "bi-eye-slash" : "bi-plus-lg")" aria-hidden="true"></i><span class="visually-hidden">@AttachTitle</span>
+                <InputFile OnChange="@(OnFilesSelectedAsync)" multiple accept="image/*" disabled="@(_isStreaming || ModelIsTextOnly)"
                            class="d-none"/>
             </label>
             <div class="btn-group btn-group-sm position-relative">
@@ -336,10 +343,12 @@
         Events.Changed += OnConversationsChanged;
         await Task.WhenAll(RefreshModelsAsync(), LoadPersonasAsync());
 
-        // First visit to "/": OnParametersSetAsync returns early (null id == null current id), so apply the default here.
+        // First visit to "/": OnParametersSetAsync returns early (null id == null current id), so apply the default
+        // persona and probe the default model here.
         if (Id is null)
         {
             _personaKey = DefaultPersonaKey();
+            _ = RefreshContextWindowAsync();
         }
     }
 
@@ -387,6 +396,7 @@
         _summaryThrough = 0;
         _contextTokens = null;
         _contextWindow = null;
+        _supportsImages = null;
         _showSummary = false;
 
         if (Id is not { } id)
@@ -481,6 +491,7 @@
         _ = InvokeAsync(async () =>
         {
             await RefreshModelsAsync();
+            _ = RefreshContextWindowAsync(); // the selection may have moved to another model
             StateHasChanged();
         });
 
@@ -525,6 +536,12 @@
     {
         if (!CanSend || Selected is not { } model)
         {
+            return;
+        }
+
+        if (ModelIsTextOnly && _pendingImages.Count > 0)
+        {
+            _imageError = $"{model.Model} cannot see images. Remove them or pick a vision model.";
             return;
         }
 
@@ -765,6 +782,53 @@
     private readonly HashSet<ChatImage> _expandedImages = [];
     private string? _imageError;
 
+    /// <summary>Whether the selected model accepts images: false disables attaching and strips images from requests; null (unknown) behaves as before.</summary>
+    private bool? _supportsImages;
+    private readonly Dictionary<string, bool?> _visionCache = new(StringComparer.Ordinal);
+
+    private bool ModelIsTextOnly => _supportsImages == false;
+
+    private int ImagesInContext => _turns.Skip(_summaryThrough).Sum(t => t.Images.Count);
+
+    private string AttachTitle => ModelIsTextOnly
+        ? $"{Selected?.Model} does not accept images"
+        : "Attach images (JPEG, PNG, GIF, WebP)";
+
+    /// <summary>Probes the backend once per model; the result drives the attach button and request composition.</summary>
+    private async Task RefreshSupportsImagesAsync()
+    {
+        if (Selected is not { } model)
+        {
+            _supportsImages = null;
+            return;
+        }
+
+        if (_visionCache.TryGetValue(model.Key, out var cached))
+        {
+            _supportsImages = cached;
+            return;
+        }
+
+        try
+        {
+            var client = await Registry.GetAsync(model.ConnectionId, _disposed.Token);
+            var supports = await client.SupportsImagesAsync(model.Model, _disposed.Token);
+            _visionCache[model.Key] = supports;
+            if (Selected?.Key == model.Key)
+            {
+                _supportsImages = supports;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            // Unknown is a valid state: images are sent as before.
+        }
+    }
+
     private async Task OnFilesSelectedAsync(InputFileChangeEventArgs e)
     {
         _imageError = null;
@@ -844,8 +908,15 @@
             history.Add(new ChatMessage(ChatRole.System, system));
         }
 
-        history.AddRange(_turns.Skip(_summaryThrough).Select(t => new ChatMessage(t.Role, t.Text, t.Images)));
+        history.AddRange(_turns.Skip(_summaryThrough).Select(ToRequestMessage));
         return history;
+    }
+
+    /// <summary>A transcript turn as sent on the wire. A model known not to see images gets a note in place of each attachment.</summary>
+    private ChatMessage ToRequestMessage(ChatTurn turn)
+    {
+        var message = new ChatMessage(turn.Role, turn.Text, turn.Images);
+        return ModelIsTextOnly ? message.WithImagesAsText() : message;
     }
 
     /// <summary>Tokens the next request would carry: exact (from the last reply) plus whatever is being typed, else an estimate.</summary>
@@ -881,6 +952,8 @@
 
     private async Task RefreshContextWindowAsync()
     {
+        _ = RefreshSupportsImagesAsync();
+
         if (Selected is not { } model)
         {
             _contextWindow = null;
@@ -954,7 +1027,7 @@
         }
 
         var older = _turns.Skip(_summaryThrough).Take(through - _summaryThrough)
-            .Select(t => new ChatMessage(t.Role, t.Text, t.Images)).ToList();
+            .Select(ToRequestMessage).ToList();
 
         _compacting = true;
         _error = null;

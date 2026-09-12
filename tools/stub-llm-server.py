@@ -50,14 +50,15 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/ps":
             self._json({"models": [{"name": "fake-llama:8b", "model": "fake-llama:8b", "context_length": 8192}]})
         elif self.path.startswith("/api/v0/models/"):
-            self._json({"id": self.path.rsplit("/", 1)[-1], "type": "llm", "max_context_length": 4096})
+            mid = self.path.rsplit("/", 1)[-1]
+            self._json({"id": mid, "type": "vlm" if mid == "fake-gpt-vision" else "llm", "max_context_length": 4096})
         elif self.path == "/api/tags":
             self._json({"models": [{"name": "fake-llama:8b"}, {"name": "fake-tiny:1b"}]})
         elif self.path.startswith("/v1/models"):
             if self.headers.get("x-api-key"):
                 self._json({"data": [{"id": "fake-claude", "display_name": "Fake Claude", "created_at": "2026-01-01T00:00:00Z", "type": "model"}], "has_more": False, "first_id": "fake-claude", "last_id": "fake-claude"})
             else:
-                self._json({"object": "list", "data": [{"id": "fake-gpt", "object": "model"}]})
+                self._json({"object": "list", "data": [{"id": "fake-gpt", "object": "model"}, {"id": "fake-gpt-vision", "object": "model"}]})
         else:
             self.send_response(404); self.end_headers()
 
@@ -79,7 +80,8 @@ class H(BaseHTTPRequestHandler):
             return len(m.get("images") or [])
         print("POST", self.path, body.get("model"), [(m.get("role"), imgs(m)) for m in body.get("messages", [])], flush=True)
         if self.path == "/api/show":
-            self._json({"model_info": {"general.architecture": "llama", "llama.context_length": 131072}}); return
+            caps = ["completion", "vision"] if body.get("model") == "fake-llama:8b" else ["completion"]
+            self._json({"capabilities": caps, "model_info": {"general.architecture": "llama", "llama.context_length": 131072}}); return
         if self.path == "/api/chat":
             self.send_response(200); self.send_header("Content-Type", "application/x-ndjson"); self.end_headers()
             for w in WORDS:

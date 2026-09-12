@@ -144,6 +144,69 @@ public class ContextTests
         Assert.Null(await client.GetContextWindowAsync("nope", CancellationToken.None));
     }
 
+    // ---------- image support ----------
+
+    [Fact]
+    public async Task Ollama_ReadsVisionCapabilityFromShow_NullWhenAbsent()
+    {
+        var vision = new OllamaClient(new StubClientFactory(StubHandler.Text("""{"capabilities":["completion","vision"],"model_info":{}}"""), "http://ollama.test:11434"),
+            TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434"));
+        Assert.True(await vision.SupportsImagesAsync("gemma3", CancellationToken.None));
+
+        var textOnly = new OllamaClient(new StubClientFactory(StubHandler.Text("""{"capabilities":["completion","tools"],"model_info":{}}"""), "http://ollama.test:11434"),
+            TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434"));
+        Assert.False(await textOnly.SupportsImagesAsync("llama3", CancellationToken.None));
+
+        var old = new OllamaClient(new StubClientFactory(StubHandler.Text("""{"model_info":{"llama.context_length":8192}}"""), "http://ollama.test:11434"),
+            TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434"));
+        Assert.Null(await old.SupportsImagesAsync("llama3", CancellationToken.None));
+
+        var down = new OllamaClient(new StubClientFactory(StubHandler.Route(new Dictionary<string, (string, string)>()), "http://ollama.test:11434"),
+            TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434"));
+        Assert.Null(await down.SupportsImagesAsync("llama3", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task OpenAi_ReadsLmStudioModelType_NullElsewhere()
+    {
+        var routes = new Dictionary<string, (string, string)>
+        {
+            ["GET /api/v0/models/qwen-vl"] = ("""{"id":"qwen-vl","type":"vlm","max_context_length":32768}""", "application/json"),
+            ["GET /api/v0/models/qwen"] = ("""{"id":"qwen","type":"llm","max_context_length":40960}""", "application/json"),
+        };
+        var client = new OpenAiCompatibleClient(new StubClientFactory(StubHandler.Route(routes), "http://lm.test:1234/v1"),
+            TestConnections.Make("LM Studio", BackendKind.OpenAiCompatible, "http://lm.test:1234/v1"));
+
+        Assert.True(await client.SupportsImagesAsync("qwen-vl", CancellationToken.None));
+        Assert.False(await client.SupportsImagesAsync("qwen", CancellationToken.None));
+        Assert.Null(await client.SupportsImagesAsync("unknown", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Anthropic_AlwaysSupportsImages()
+    {
+        var client = new AnthropicLlmClient(
+            TestConnections.Make("Claude", BackendKind.Anthropic, "http://anthropic.test", apiKey: "k"),
+            new HttpClient(StubHandler.Route(new Dictionary<string, (string, string)>()), disposeHandler: false));
+
+        Assert.True(await client.SupportsImagesAsync("claude-opus-5", CancellationToken.None));
+    }
+
+    [Fact]
+    public void WithImagesAsText_ReplacesImagesWithNote_LeavesTextOnlyMessagesAlone()
+    {
+        var image = new ChatImage("image/png", [1, 2, 3]);
+        var withText = new ChatMessage(ChatRole.User, "what is this?", [image]).WithImagesAsText();
+        Assert.False(withText.HasImages);
+        Assert.Equal("what is this?\n\n[1 image was attached here but omitted: this model cannot see images.]", withText.Content);
+
+        var imagesOnly = new ChatMessage(ChatRole.User, "", [image, image]).WithImagesAsText();
+        Assert.Equal("[2 images were attached here but omitted: this model cannot see images.]", imagesOnly.Content);
+
+        var plain = new ChatMessage(ChatRole.Assistant, "hi");
+        Assert.Same(plain, plain.WithImagesAsText());
+    }
+
     // ---------- stats readout ----------
 
     [Fact]

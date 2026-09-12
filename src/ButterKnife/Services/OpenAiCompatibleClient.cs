@@ -83,14 +83,32 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
             return configured;
         }
 
+        var info = await GetLmStudioModelAsync(model, cancellationToken);
+        return info?.MaxContextLength is > 0 ? info.MaxContextLength : null;
+    }
+
+    /// <summary>LM Studio types its models "vlm" (vision) or "llm"; there is no OpenAI-standard signal, so other servers are "unknown".</summary>
+    public override async Task<bool?> SupportsImagesAsync(string model, CancellationToken cancellationToken = default)
+    {
+        var info = await GetLmStudioModelAsync(model, cancellationToken);
+        return info?.Type?.ToLowerInvariant() switch
+        {
+            "vlm" => true,
+            "llm" => false,
+            _ => null,
+        };
+    }
+
+    /// <summary>LM Studio's native REST API lives at the server root, i.e. BaseUrl without its /v1.</summary>
+    private Task<LmStudioModel?> GetLmStudioModelAsync(string model, CancellationToken cancellationToken)
+    {
         var root = Connection.BaseUrl.TrimEnd('/');
         if (root.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
         {
             root = root[..^3];
         }
 
-        var info = await TryGetJsonAsync<LmStudioModel>($"{root}/api/v0/models/{Uri.EscapeDataString(model)}", cancellationToken);
-        return info?.MaxContextLength is > 0 ? info.MaxContextLength : null;
+        return TryGetJsonAsync<LmStudioModel>($"{root}/api/v0/models/{Uri.EscapeDataString(model)}", cancellationToken);
     }
 
     /// <summary>Plain string when text-only (widest compatibility); otherwise the multimodal parts array.</summary>
@@ -142,7 +160,7 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
         [property: JsonPropertyName("prompt_tokens")] int? PromptTokens,
         [property: JsonPropertyName("completion_tokens")] int? CompletionTokens);
 
-    private sealed record LmStudioModel([property: JsonPropertyName("max_context_length")] int? MaxContextLength);
+    private sealed record LmStudioModel([property: JsonPropertyName("max_context_length")] int? MaxContextLength, string? Type);
 
     private sealed record Choice(Delta? Delta);
 

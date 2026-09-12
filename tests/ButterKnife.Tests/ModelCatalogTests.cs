@@ -42,6 +42,8 @@ public class ModelCatalogTests
 
         public Task<int?> GetContextWindowAsync(string model, CancellationToken cancellationToken = default) => Task.FromResult<int?>(null);
 
+        public Task<bool?> SupportsImagesAsync(string model, CancellationToken cancellationToken = default) => Task.FromResult<bool?>(null);
+
         public Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken = default)
             => models is null
                 ? Task.FromException<IReadOnlyList<string>>(new HttpRequestException("connection refused"))
