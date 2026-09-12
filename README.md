@@ -130,3 +130,15 @@ profile that starts the app on port 5176 with seed connections already pointing 
 
 The chat page's JS module exposes two test hooks used by browser-driven checks: `debugInjectRecording` runs the
 transcription path without a microphone, and `debugUseSyntheticMicrophone` feeds the silence detector a tone.
+
+## License
+
+ButterKnife is **source-available, not open source**. It is licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE.md):
+
+- You may use, copy, modify and share it for **noncommercial** purposes: personal use, hobby projects, education,
+  research, and use by charities, public institutions and similar organisations.
+- **Any commercial use needs written permission** from the copyright holder. Open an issue on this repository to ask.
+- Every copy must keep the copyright notice and this license.
+
+Copyright Roy S.
