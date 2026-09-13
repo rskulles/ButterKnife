@@ -24,7 +24,11 @@
   <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Native libraries (SQLite's e_sqlite3) ship beside the executable rather than being extracted to ~/.net on
+         first start: the extraction folder is shared by every copy of the same build and an interrupted first launch
+         leaves it corrupt (AccessViolation on every later start), and on macOS the file beside the executable can
+         be code-signed and notarized with the rest of the bundle. -->
+    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
     <DebugType>none</DebugType>

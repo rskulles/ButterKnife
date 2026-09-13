@@ -84,7 +84,7 @@ jobs:
           signing-account-name: ${{ env.SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ env.SIGNING_PROFILE }}
           files-folder: ${{ github.workspace }}/out/win-x64
-          files-folder-filter: exe
+          files-folder-filter: exe,dll
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -152,8 +152,9 @@ jobs:
         run: |
           APP=out/app-${{ matrix.rid }}/ButterKnife.app
           IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
-          # Inner executables first (the .NET server needs its entitlements under the hardened runtime; the Swift menu
-          # bar helper needs none), then the bundle as a whole.
+          # Native libraries and inner executables first (the .NET server needs its entitlements under the hardened
+          # runtime; the Swift menu bar helper needs none), then the bundle as a whole.
+          for lib in "$APP"/Contents/MacOS/*.dylib; do [ -e "$lib" ] && codesign --force --options runtime --timestamp --sign "$IDENTITY" "$lib"; done
           codesign --force --options runtime --timestamp --entitlements packaging/macos/entitlements.plist --sign "$IDENTITY" "$APP/Contents/MacOS/ButterKnife"
           codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP/Contents/MacOS/ButterKnifeMenu"
           codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"

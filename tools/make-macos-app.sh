@@ -19,6 +19,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -O -target "$ARCH-apple-macos12.0" -framework AppKit -o "$APP/Contents/MacOS/ButterKnifeMenu" "$HERE/packaging/macos/ButterKnifeMenu/main.swift"
 cp "$PUBLISH/ButterKnife" "$APP/Contents/MacOS/ButterKnife"
 chmod +x "$APP/Contents/MacOS/ButterKnife"
+# Native libraries published beside the executable (SQLite) go next to it inside the bundle.
+cp "$PUBLISH"/*.dylib "$APP/Contents/MacOS/" 2>/dev/null || true
 cp -R "$PUBLISH/wwwroot" "$APP/Contents/Resources/wwwroot"
 cp "$PUBLISH/appsettings.json" "$PUBLISH/ButterKnife.staticwebassets.endpoints.json" "$APP/Contents/Resources/"
 cp "$HERE/packaging/macos/ButterKnife.icns" "$HERE/packaging/macos/MenuIcon.png" "$HERE/packaging/macos/MenuIcon@2x.png" "$APP/Contents/Resources/"
@@ -26,6 +28,7 @@ sed "s/__VERSION__/$VERSION/g" "$HERE/packaging/macos/Info.plist" > "$APP/Conten
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # Ad-hoc signatures so the bundle is at least internally consistent; the release workflow re-signs with Developer ID.
+for lib in "$APP"/Contents/MacOS/*.dylib; do [ -e "$lib" ] && codesign --force --sign - "$lib"; done
 codesign --force --sign - --entitlements "$HERE/packaging/macos/entitlements.plist" "$APP/Contents/MacOS/ButterKnife"
 codesign --force --sign - "$APP/Contents/MacOS/ButterKnifeMenu"
 codesign --force --sign - "$APP"
