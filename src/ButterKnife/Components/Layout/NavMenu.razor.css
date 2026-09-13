@@ -18,3 +18,16 @@ nav ::deep .nav-link {
         min-height: 0;
     }
 }
+
+/* Search hits: a quiet row that lights up on hover, like the pills above it. */
+.search-hit:hover,
+.search-hit:focus {
+    background: var(--bs-tertiary-bg);
+}
+
+.search-hit mark {
+    padding: 0;
+    background: var(--bs-warning-bg-subtle);
+    color: inherit;
+    font-weight: 600;
+}

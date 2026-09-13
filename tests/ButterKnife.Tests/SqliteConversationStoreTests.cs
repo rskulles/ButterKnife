@@ -364,6 +364,55 @@ public sealed class SqliteConversationStoreTests : IDisposable
         Assert.NotNull(await _store.GetAsync(newest.Id, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task SearchFindsMessagesByPrefixAndTitlesBySubstring()
+    {
+        var cats = await _store.CreateAsync("Cat care", ConnA, "m", null, CancellationToken.None);
+        await _store.AppendMessageAsync(cats.Id, new ChatMessage(ChatRole.User, "How often should I feed a kitten?"), CancellationToken.None);
+        var reply = await _store.AppendMessageAsync(cats.Id, new ChatMessage(ChatRole.Assistant, "Kittens eat four small meals a day."), CancellationToken.None);
+        var dogs = await _store.CreateAsync("Dog training", ConnA, "m", null, CancellationToken.None);
+        await _store.AppendMessageAsync(dogs.Id, new ChatMessage(ChatRole.User, "Sit and stay commands"), CancellationToken.None);
+
+        var hits = await _store.SearchAsync("kitt", cancellationToken: CancellationToken.None);
+        Assert.Equal(2, hits.Count);
+        Assert.All(hits, h => Assert.Equal(cats.Id, h.ConversationId));
+        Assert.Contains(hits, h => h.MessageId == reply && h.Role == ChatRole.Assistant && h.Snippet.Contains($"{SearchHit.MarkStart}Kittens{SearchHit.MarkEnd}"));
+
+        var byTitle = await _store.SearchAsync("train", cancellationToken: CancellationToken.None);
+        var title = Assert.Single(byTitle);
+        Assert.Null(title.MessageId);
+        Assert.Equal(dogs.Id, title.ConversationId);
+
+        Assert.Empty(await _store.SearchAsync("   ", cancellationToken: CancellationToken.None));
+        Assert.Empty(await _store.SearchAsync("zebra", cancellationToken: CancellationToken.None));
+        Assert.Empty(await _store.SearchAsync("kitten stay", cancellationToken: CancellationToken.None)); // both words required in one message
+    }
+
+    [Fact]
+    public async Task SearchFollowsEditsAndDeletes()
+    {
+        var conv = await _store.CreateAsync("t", ConnA, "m", null, CancellationToken.None);
+        var id = await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.Assistant, "the original wording"), CancellationToken.None);
+
+        await _store.SetMessageContentAsync(conv.Id, id, "a revised phrasing", null, cancellationToken: CancellationToken.None);
+        Assert.Empty(await _store.SearchAsync("original", cancellationToken: CancellationToken.None));
+        Assert.Single(await _store.SearchAsync("revised", cancellationToken: CancellationToken.None));
+
+        await _store.DeleteMessageAsync(conv.Id, id, CancellationToken.None);
+        Assert.Empty(await _store.SearchAsync("revised", cancellationToken: CancellationToken.None));
+
+        await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.User, "kept"), CancellationToken.None);
+        await _store.DeleteAsync(conv.Id, CancellationToken.None);
+        Assert.Empty(await _store.SearchAsync("kept", cancellationToken: CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("quick brown", "\"quick\"* \"brown\"*")]
+    [InlineData("  say \"hi\" OR die  ", "\"say\"* \"hi\"* \"OR\"* \"die\"*")]
+    [InlineData("\"\"", null)]
+    [InlineData("", null)]
+    public void BuildFtsQueryQuotesAndPrefixesEveryWord(string query, string? expected) => Assert.Equal(expected, SqliteConversationStore.BuildFtsQuery(query));
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

@@ -64,6 +64,8 @@ page so only people who know it can open your chats from the Wi‑Fi; your own c
 - **Talk instead of type.** The mic button listens, stops when you pause, and transcribes through your Whisper server,
   or through the browser's own speech recognition if you don't have one. From another device this needs an `https`
   address; that's the browser's rule, not ours.
+- **Search.** A box at the top of the chat list finds any message or title across every chat and jumps straight to
+  the message.
 - **Light, dark, or match the system.** Remembered per browser.
 - **Your name, not "User".** Set it once under Settings → General.
 

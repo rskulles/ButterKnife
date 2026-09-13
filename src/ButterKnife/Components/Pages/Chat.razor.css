@@ -217,3 +217,10 @@
     overflow: auto;
     white-space: pre-wrap;
 }
+
+/* A message opened from search: a brief ring that fades. */
+.msg-highlight {
+    outline: 3px solid var(--bs-warning);
+    outline-offset: 2px;
+    transition: outline-color 1.5s ease 1s;
+}

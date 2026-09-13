@@ -363,6 +363,22 @@ function showPill(el, show) {
     pill.hidden = !show;
 }
 
+// A search result opened the chat at a message: bring it into view and flash it. Unpins auto-scroll so a reply
+// in progress does not yank the view away again.
+export function scrollToMessage(el, messageId) {
+    const bubble = el?.querySelector(`[data-message-id="${messageId}"]`);
+    if (!bubble) {
+        return false;
+    }
+    if (el) {
+        el.dataset.pinned = "0";
+    }
+    bubble.scrollIntoView({ block: "center", behavior: "smooth" });
+    bubble.classList.add("msg-highlight");
+    setTimeout(() => bubble.classList.remove("msg-highlight"), 2500);
+    return true;
+}
+
 export function scrollToBottom(el, force = false, streaming = false) {
     if (!el) {
         return;

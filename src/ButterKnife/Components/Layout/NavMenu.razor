@@ -17,7 +17,46 @@
 
     <div class="collapse d-md-block flex-grow-1" id="sidebar-nav">
         <div class="d-flex flex-column h-100">
+            @* Search: every word as a prefix, all required, over message text plus a substring match on titles.
+               Typing replaces the list with grouped hits; a hit opens the chat at that message (?m=id). *@
+            <div class="px-2 pt-2 position-relative">
+                <label class="visually-hidden" for="chat-search">Search chats</label>
+                <input id="chat-search" type="search" class="form-control form-control-sm" placeholder="Search chats" autocomplete="off"
+                       value="@_query" @oninput="OnQueryInput" @onkeydown="OnQueryKeyDown" />
+            </div>
             <nav class="nav nav-pills flex-column flex-nowrap gap-1 p-2 flex-grow-1 overflow-auto">
+                @if (Searching)
+                {
+                    @if (_results is null)
+                    {
+                        <div class="small text-body-secondary px-2 py-1"><span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Searching…</div>
+                    }
+                    else if (_results.Count == 0)
+                    {
+                        <div class="small text-body-secondary px-2 py-1" role="status">Nothing matches "@_query.Trim()".</div>
+                    }
+                    else
+                    {
+                        <div class="small text-body-secondary px-2" role="status">@_results.Count match@(_results.Count == 1 ? "" : "es") in @_results.Select(h => h.ConversationId).Distinct().Count() chat@(_results.Select(h => h.ConversationId).Distinct().Count() == 1 ? "" : "s")</div>
+                        @foreach (var group in _results.GroupBy(h => h.ConversationId))
+                        {
+                            <div class="mt-1">
+                                <NavLink class="nav-link small text-truncate py-1" href="@($"chat/{group.Key}")" title="@group.First().Title">
+                                    <i class="bi bi-chat-left-text me-2" aria-hidden="true"></i>@group.First().Title
+                                </NavLink>
+                                @foreach (var hit in group.Where(h => h.MessageId is not null))
+                                {
+                                    <a class="d-block small text-decoration-none text-body ps-4 pe-2 py-1 rounded search-hit" href="@($"chat/{hit.ConversationId}?m={hit.MessageId}")">
+                                        <span class="text-body-secondary text-uppercase" style="font-size: 0.7em">@(hit.Role == ChatRole.User ? "you" : "reply")</span>
+                                        @Snippet(hit.Snippet)
+                                    </a>
+                                }
+                            </div>
+                        }
+                    }
+                }
+                else
+                {
                 <NavLink class="nav-link text-nowrap" href="" Match="NavLinkMatch.All" title="New chat (Ctrl+Shift+O, ⌘⇧O on a Mac)">
                     <i class="bi bi-plus-square-fill me-2" aria-hidden="true"></i>New chat
                 </NavLink>
@@ -47,6 +86,7 @@
                 {
                     <div class="px-2 small text-warning">@_renameError</div>
                 }
+                }
             </nav>
 
             @* pb-3 matches the article's bottom padding so these buttons line up with the composer's button row. *@
@@ -69,6 +109,75 @@
     private string _renameText = "";
     private string? _renameError;
     private bool _showArchived;
+
+    private string _query = "";
+    private IReadOnlyList<SearchHit>? _results;
+    private CancellationTokenSource? _searchCts;
+
+    private bool Searching => _query.Trim().Length >= 2;
+
+    /// <summary>A snippet from the store with its match markers turned into &lt;mark&gt;; everything else stays text.</summary>
+    private static RenderFragment Snippet(string snippet) => builder =>
+    {
+        var seq = 0;
+        var marked = false;
+        foreach (var part in snippet.Split([SearchHit.MarkStart, SearchHit.MarkEnd]))
+        {
+            if (marked)
+            {
+                builder.OpenElement(seq++, "mark");
+                builder.AddContent(seq++, part);
+                builder.CloseElement();
+            }
+            else
+            {
+                builder.AddContent(seq++, part);
+            }
+            marked = !marked;
+        }
+    };
+
+    /// <summary>Debounced: the search runs a short moment after the last keystroke, and a newer keystroke cancels an older run.</summary>
+    private async Task OnQueryInput(ChangeEventArgs e)
+    {
+        _query = e.Value?.ToString() ?? "";
+        _searchCts?.Cancel();
+        _searchCts = new CancellationTokenSource();
+        var token = _searchCts.Token;
+        _results = null;
+        if (!Searching)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.Delay(250, token);
+            var hits = await Store.SearchAsync(_query, cancellationToken: token);
+            if (!token.IsCancellationRequested)
+            {
+                _results = hits;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _results = [];
+            _renameError = $"Search failed: {ex.Message}";
+        }
+    }
+
+    private void OnQueryKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            _searchCts?.Cancel();
+            _query = "";
+            _results = null;
+        }
+    }
 
     /// <summary>
     /// One sidebar row: the link, or the inline delete confirmation / rename box, plus an actions menu. The menu is

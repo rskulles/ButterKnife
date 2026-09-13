@@ -238,6 +238,7 @@ public sealed class SqliteDatabase
             await AddColumnIfMissingAsync(connection, "messages", "stats", "TEXT NULL", cancellationToken);
             await AddColumnIfMissingAsync(connection, "conversations", "pinned", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
             await AddColumnIfMissingAsync(connection, "conversations", "archived", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+            await EnsureSearchIndexAsync(connection, cancellationToken);
 
             await SeedPersonasAsync(connection, cancellationToken);
             _initialized = true;
@@ -268,6 +269,47 @@ public sealed class SqliteDatabase
             cmd.Parameters.AddWithValue("$order", order++);
             cmd.Parameters.AddWithValue("$now", now);
             await cmd.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Full-text search over message content: an external-content FTS5 table kept in step by triggers, so the text
+    /// is stored once. Created after the messages table; a database that predates it gets a one-off rebuild.
+    /// </summary>
+    private static async Task EnsureSearchIndexAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        bool existed;
+        await using (var check = connection.CreateCommand())
+        {
+            check.CommandText = "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts';";
+            existed = Convert.ToInt64(await check.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture) > 0;
+        }
+
+        await ExecAsync(connection, """
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                content,
+                content = 'messages',
+                content_rowid = 'id',
+                tokenize = 'unicode61 remove_diacritics 2'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE OF content ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+                INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+            END;
+            """, cancellationToken);
+
+        if (!existed)
+        {
+            await ExecAsync(connection, "INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');", cancellationToken);
         }
     }
 

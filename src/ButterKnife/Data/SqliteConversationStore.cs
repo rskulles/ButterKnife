@@ -88,6 +88,75 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         return list;
     }
 
+    public async Task<IReadOnlyList<SearchHit>> SearchAsync(string query, int limit = 50, CancellationToken cancellationToken = default)
+    {
+        var fts = BuildFtsQuery(query);
+        if (fts is null)
+        {
+            return [];
+        }
+
+        var hits = new List<SearchHit>();
+        await using var connection = await db.OpenAsync(cancellationToken);
+
+        await using (var titles = connection.CreateCommand())
+        {
+            titles.CommandText = "SELECT id, title, updated_at FROM conversations WHERE title LIKE $like ESCAPE '\\' ORDER BY updated_at DESC LIMIT $limit;";
+            titles.Parameters.AddWithValue("$like", "%" + query.Trim().Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%");
+            titles.Parameters.AddWithValue("$limit", limit);
+            await using var reader = await titles.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                hits.Add(new SearchHit(Guid.Parse(reader.GetString(0)), reader.GetString(1), null, null, reader.GetString(1), SqliteDatabase.Parse(reader.GetString(2))));
+            }
+        }
+
+        await using (var messages = connection.CreateCommand())
+        {
+            messages.CommandText = """
+                SELECT m.conversation_id, c.title, m.id, m.role, snippet(messages_fts, 0, $start, $end, '…', 14), m.created_at
+                FROM messages_fts
+                JOIN messages m ON m.id = messages_fts.rowid
+                JOIN conversations c ON c.id = m.conversation_id
+                WHERE messages_fts MATCH $query
+                ORDER BY bm25(messages_fts)
+                LIMIT $limit;
+                """;
+            messages.Parameters.AddWithValue("$query", fts);
+            messages.Parameters.AddWithValue("$start", SearchHit.MarkStart.ToString());
+            messages.Parameters.AddWithValue("$end", SearchHit.MarkEnd.ToString());
+            messages.Parameters.AddWithValue("$limit", limit);
+            await using var reader = await messages.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                hits.Add(new SearchHit(
+                    Guid.Parse(reader.GetString(0)),
+                    reader.GetString(1),
+                    reader.GetInt64(2),
+                    Enum.Parse<ChatRole>(reader.GetString(3)),
+                    reader.GetString(4),
+                    SqliteDatabase.Parse(reader.GetString(5))));
+            }
+        }
+
+        return hits.Count <= limit ? hits : hits.Take(limit).ToList();
+    }
+
+    /// <summary>
+    /// "quick brown" → "\"quick\"* \"brown\"*": every word quoted (so FTS syntax in the text is harmless) and
+    /// prefix-matched, all required. Null when no word is left.
+    /// </summary>
+    public static string? BuildFtsQuery(string query)
+    {
+        var terms = query
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => t.Replace("\"", ""))
+            .Where(t => t.Length > 0)
+            .Select(t => $"\"{t}\"*")
+            .ToArray();
+        return terms.Length == 0 ? null : string.Join(" ", terms);
+    }
+
     public Task SetPinnedAsync(Guid conversationId, bool pinned, CancellationToken cancellationToken = default) =>
         SetFlagAsync(conversationId, "pinned", pinned, cancellationToken);
 

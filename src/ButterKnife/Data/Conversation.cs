@@ -2,6 +2,16 @@ using ButterKnife.Services;
 
 namespace ButterKnife.Data;
 
+/// <summary>
+/// A search result: a message (with a snippet whose matches are wrapped in <see cref="SearchHit.MarkStart"/> and
+/// <see cref="SearchHit.MarkEnd"/>) or, when <see cref="MessageId"/> is null, a conversation whose title matched.
+/// </summary>
+public sealed record SearchHit(Guid ConversationId, string Title, long? MessageId, ChatRole? Role, string Snippet, DateTimeOffset At)
+{
+    public const char MarkStart = '\u0001';
+    public const char MarkEnd = '\u0002';
+}
+
 /// <summary>A sidebar row. Pinned conversations sort first; archived ones are folded away but otherwise ordinary.</summary>
 public sealed record ConversationSummary(Guid Id, string Title, DateTimeOffset UpdatedAt, bool Pinned = false, bool Archived = false);
 

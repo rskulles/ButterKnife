@@ -12,6 +12,12 @@ public interface IConversationStore
     /// <summary>Pinned first, then most recently updated first; archived conversations are included and flagged.</summary>
     Task<IReadOnlyList<ConversationSummary>> ListAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Full-text search over message content (every word as a prefix, all words required) plus a substring match on
+    /// titles. Best matches first, at most <paramref name="limit"/> hits. Blank queries return nothing.
+    /// </summary>
+    Task<IReadOnlyList<SearchHit>> SearchAsync(string query, int limit = 50, CancellationToken cancellationToken = default);
+
     /// <summary>Pinned conversations stay at the top of the sidebar.</summary>
     Task SetPinnedAsync(Guid conversationId, bool pinned, CancellationToken cancellationToken = default);
 

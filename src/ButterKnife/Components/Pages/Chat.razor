@@ -251,7 +251,7 @@
                 }
                 else
                 {
-                    <div class="msg-bubble ms-auto px-3 py-2 rounded-3 bg-primary-subtle prewrap text-break">
+                    <div data-message-id="@turn.MessageId" class="msg-bubble ms-auto px-3 py-2 rounded-3 bg-primary-subtle prewrap text-break">
                         @if (turn.Images.Count > 0)
                         {
                             <div class="d-flex flex-wrap gap-2 mb-2">
@@ -627,6 +627,11 @@
 
     [Parameter] public Guid? Id { get; set; }
 
+    /// <summary>?m=&lt;message id&gt; from a search result: scroll to that message and flash it once the transcript has rendered.</summary>
+    [SupplyParameterFromQuery(Name = "m")] public long? HighlightMessageId { get; set; }
+
+    private long? _pendingHighlight;
+
     private readonly List<ChatTurn> _turns = [];
     private Guid? _conversationId;
     private string? _title;
@@ -800,6 +805,11 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        if (HighlightMessageId is { } highlight)
+        {
+            _pendingHighlight = highlight;
+        }
+
         if (Id == _conversationId)
         {
             return; // same conversation (including the navigation we trigger ourselves after creating one)
@@ -885,6 +895,18 @@
                 _autoStop = prefs.AutoStop ?? _autoStop;
                 _autoSend = prefs.AutoSend ?? _autoSend;
                 StateHasChanged();
+            }
+        }
+
+        if (_pendingHighlight is { } target && _js is not null && _turns.Count > 0)
+        {
+            _pendingHighlight = null;
+            try
+            {
+                await _js.InvokeVoidAsync("scrollToMessage", _messagesElement, target);
+            }
+            catch (JSDisconnectedException)
+            {
             }
         }
 
