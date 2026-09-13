@@ -187,6 +187,13 @@
                                     <i class="bi bi-pencil" aria-hidden="true"></i>
                                 </button>
                             }
+                            @if (turn.Role == ChatRole.Assistant)
+                            {
+                                <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Copy the reply as Markdown"
+                                        aria-label="Copy the reply as Markdown" @onclick="() => CopyReplyAsync(turn)">
+                                    <i class="bi @(_copied == turn ? "bi-clipboard-check" : "bi-clipboard")" aria-hidden="true"></i>@(_copied == turn ? " Copied" : "")
+                                </button>
+                            }
                             @if (turn.Role == ChatRole.Assistant && turn == _turns[^1])
                             {
                                 @if (turn.CanContinue)
@@ -418,6 +425,9 @@
 
     /// <summary>The turn whose delete confirmation is showing, if any.</summary>
     private ChatTurn? _confirmDelete;
+
+    /// <summary>The reply most recently copied, for the brief "Copied" feedback.</summary>
+    private ChatTurn? _copied;
 
     private ElementReference _messagesElement;
     private ElementReference _inputElement;
@@ -937,6 +947,36 @@
             history[^1] = history[^1] with { Content = history[^1].Content.TrimEnd() };
         }
         await StreamReplyAsync(conversationId, model, history, last);
+    }
+
+    /// <summary>Copies the reply's source Markdown (not the rendered HTML), so it pastes cleanly into notes and editors.</summary>
+    private async Task CopyReplyAsync(ChatTurn turn)
+    {
+        if (_js is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (await _js.InvokeAsync<bool>("copyText", turn.Text))
+            {
+                _copied = turn;
+                StateHasChanged();
+                await Task.Delay(1500);
+                if (_copied == turn)
+                {
+                    _copied = null;
+                }
+            }
+            else
+            {
+                _error = "Could not copy: the browser refused clipboard access.";
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+        }
     }
 
     /// <summary>Removes just this message. The compaction checkpoint follows the store's rule (cleared if it no longer fits).</summary>
