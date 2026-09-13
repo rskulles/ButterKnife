@@ -159,22 +159,43 @@
                 }
                 @if (!turn.IsStreaming && turn.MessageId is not null && _editing != turn)
                 {
-                    <div class="msg-actions d-flex gap-1 @(turn.Role == ChatRole.User ? "justify-content-end" : "")">
-                        @if (turn.Role == ChatRole.User)
-                        {
-                            <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Edit and resend"
-                                    aria-label="Edit and resend" @onclick="() => BeginEdit(turn)" disabled="@_isStreaming">
-                                <i class="bi bi-pencil" aria-hidden="true"></i>
+                    @if (_confirmDelete == turn)
+                    {
+                        <div class="msg-actions-confirm small d-flex align-items-center gap-2 mt-1 @(turn.Role == ChatRole.User ? "justify-content-end" : "")" role="alertdialog" aria-label="Delete?">
+                            <span>Delete?</span>
+                            <button type="button" class="btn btn-sm btn-danger" @onclick="() => DeleteTurnAsync(turn)">This message</button>
+                            @if (turn != _turns[^1])
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => DeleteFromTurnAsync(turn)">
+                                    This and everything after
+                                </button>
+                            }
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmDelete = null">Keep</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="msg-actions d-flex gap-1 @(turn.Role == ChatRole.User ? "justify-content-end" : "")">
+                            @if (turn.Role == ChatRole.User)
+                            {
+                                <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Edit and resend"
+                                        aria-label="Edit and resend" @onclick="() => BeginEdit(turn)" disabled="@_isStreaming">
+                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                </button>
+                            }
+                            @if (turn.Role == ChatRole.Assistant && turn == _turns[^1])
+                            {
+                                <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Regenerate this reply"
+                                        aria-label="Regenerate this reply" @onclick="RegenerateAsync" disabled="@(_isStreaming || Selected is null)">
+                                    <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                                </button>
+                            }
+                            <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Delete"
+                                    aria-label="Delete this message" @onclick="() => _confirmDelete = turn" disabled="@_isStreaming">
+                                <i class="bi bi-trash" aria-hidden="true"></i>
                             </button>
-                        }
-                        @if (turn.Role == ChatRole.Assistant && turn == _turns[^1])
-                        {
-                            <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Regenerate this reply"
-                                    aria-label="Regenerate this reply" @onclick="RegenerateAsync" disabled="@(_isStreaming || Selected is null)">
-                                <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
-                            </button>
-                        }
-                    </div>
+                        </div>
+                    }
                 }
             </div>
         }
@@ -383,6 +404,9 @@
 
     /// <summary>Set whenever the transcript changes outside streaming; the next render then highlights code blocks and adds copy buttons.</summary>
     private bool _codeBlocksDirty;
+
+    /// <summary>The turn whose delete confirmation is showing, if any.</summary>
+    private ChatTurn? _confirmDelete;
 
     private ElementReference _messagesElement;
     private ElementReference _inputElement;
@@ -871,6 +895,53 @@
         _error = null;
         _contextTokens = null;
         await StreamReplyAsync(conversationId, model, BuildHistory());
+    }
+
+    /// <summary>Removes just this message. The compaction checkpoint follows the store's rule (cleared if it no longer fits).</summary>
+    private async Task DeleteTurnAsync(ChatTurn turn)
+    {
+        _confirmDelete = null;
+        if (_isStreaming || _conversationId is not { } conversationId || turn.MessageId is not { } messageId)
+        {
+            return;
+        }
+
+        try
+        {
+            await Store.DeleteMessageAsync(conversationId, messageId, _disposed.Token);
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not delete the message: {ex.Message}";
+            return;
+        }
+
+        _turns.Remove(turn);
+        if (_summaryThrough > _turns.Count)
+        {
+            _summary = null;
+            _summaryThrough = 0;
+        }
+        _contextTokens = null;
+        Events.NotifyChanged();
+    }
+
+    private async Task DeleteFromTurnAsync(ChatTurn turn)
+    {
+        _confirmDelete = null;
+        if (_isStreaming || _conversationId is not { } conversationId || turn.MessageId is not { } messageId)
+        {
+            return;
+        }
+
+        if (await TruncateFromAsync(conversationId, turn, messageId))
+        {
+            _contextTokens = null;
+        }
     }
 
     /// <summary>Removes a turn and everything after it from the store and the transcript; the compaction checkpoint follows the store's rule.</summary>
