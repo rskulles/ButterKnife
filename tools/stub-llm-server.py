@@ -101,7 +101,8 @@ class H(BaseHTTPRequestHandler):
         last = msgs[-1] if msgs else {}
         continuing = last.get("role") == "assistant"
         cut = (not continuing) and "[cut]" in str(last.get("content", ""))
-        words = CONTINUATION if continuing else (WORDS[:6] if cut else WORDS)
+        # Replies start with the model's name so two models answering side by side can be told apart.
+        words = CONTINUATION if continuing else ([f"_{body.get('model')}_ ", "says:\n\n"] + (WORDS[:6] if cut else WORDS))
         finish = "length" if cut else "stop"
         if self.path == "/api/chat":
             self.send_response(200); self.send_header("Content-Type", "application/x-ndjson"); self.end_headers()

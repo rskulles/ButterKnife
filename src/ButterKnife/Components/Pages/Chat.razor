@@ -26,6 +26,30 @@
 <div class="chat-frame d-flex flex-column gap-2 flex-grow-1" @ref="_chatFrameElement">
     <header class="d-flex flex-wrap align-items-center gap-2">
         <PhoneLink />
+        @if (_showCompare)
+        {
+            <div class="input-group input-group-sm w-auto" title="Every new prompt is answered by both models, side by side; keep the one you prefer.">
+                <span class="input-group-text"><i class="bi bi-layout-split me-1" aria-hidden="true"></i>Compare with</span>
+                <label class="visually-hidden" for="compare-select">Second model</label>
+                <select id="compare-select" class="form-select" value="@_compareKey" @onchange="e => _compareKey = e.Value?.ToString() ?? string.Empty" disabled="@_isStreaming">
+                    <option value="">pick a model…</option>
+                    @foreach (var m in _models.Where(m => m.Key != _selectedKey))
+                    {
+                        <option value="@m.Key">@m</option>
+                    }
+                </select>
+                <button type="button" class="btn btn-outline-secondary" title="Stop comparing" aria-label="Stop comparing" @onclick="() => { _showCompare = false; _compareKey = string.Empty; }">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+        }
+        else
+        {
+            <button type="button" class="btn btn-sm btn-outline-secondary d-none d-md-inline-flex align-items-center gap-1" @onclick="() => _showCompare = true"
+                    title="Answer each prompt with two models side by side" disabled="@(_models.Count < 2)">
+                <i class="bi bi-layout-split" aria-hidden="true"></i>Compare
+            </button>
+        }
         <label class="visually-hidden" for="persona-select">Persona</label>
         <select id="persona-select" class="form-select form-select-sm w-auto ms-auto"
                 value="@_personaKey" @onchange="OnPersonaChangedAsync" disabled="@_isStreaming"
@@ -98,7 +122,43 @@
                         <time class="msg-time ms-2" datetime="@at.ToString("O")" title="@at.LocalDateTime.ToString("f")">@FormatWhen(at)</time>
                     }
                 </div>
-                @if (turn.Role == ChatRole.Assistant)
+                @if (turn.Role == ChatRole.Assistant && turn.Alternative is { } alt)
+                {
+                    @* Two models answered the same prompt: show both; "Keep" decides which one stays in the conversation. *@
+                    <div class="row g-2 msg-compare">
+                        @foreach (var (candidate, isPrimary) in new[] { (turn, true), (alt, false) })
+                        {
+                            <div class="col-md-6">
+                                <div class="small text-body-secondary mb-1"><i class="bi bi-cpu me-1" aria-hidden="true"></i>@candidate.ModelName</div>
+                                @if (candidate.Reasoning.Length > 0)
+                                {
+                                    <details class="msg-thinking small mb-1" open="@(candidate.IsStreaming && candidate.Text.Length == 0)">
+                                        <summary class="text-body-secondary"><i class="bi bi-lightbulb me-1" aria-hidden="true"></i>@(candidate.IsStreaming && candidate.Text.Length == 0 ? "Thinking…" : candidate.ThinkingLabel)</summary>
+                                        <div class="prewrap text-body-secondary mt-1 px-2">@candidate.Reasoning</div>
+                                    </details>
+                                }
+                                <div class="msg-markdown px-3 py-2 rounded-3 bg-body-tertiary text-break">@candidate.Html@(candidate.IsStreaming ? "▍" : "")</div>
+                                @if (candidate.IsStreaming)
+                                {
+                                    <ButterKnifeThrobber Stats="candidate.GetStats"/>
+                                }
+                                else
+                                {
+                                    <div class="d-flex align-items-center gap-2 mt-1 small text-body-secondary">
+                                        @if (candidate.Chunks > 0)
+                                        {
+                                            <span title="@ButterKnifeThrobber.StatsTooltip">@ButterKnifeThrobber.FormatStats(candidate.GetStats())</span>
+                                        }
+                                        <button type="button" class="btn btn-sm btn-outline-primary ms-auto" @onclick="() => KeepAsync(turn, isPrimary)" disabled="@_isStreaming">
+                                            Keep this one
+                                        </button>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+                else if (turn.Role == ChatRole.Assistant)
                 {
                     @if (turn.Reasoning.Length > 0)
                     {
@@ -446,6 +506,11 @@
     /// <summary>The reply being read aloud by the browser's speech synthesis, if any.</summary>
     private ChatTurn? _speaking;
 
+    /// <summary>Compare mode: the second model's key (empty = none) and whether its picker is shown.</summary>
+    private bool _showCompare;
+    private string _compareKey = "";
+    private ModelDescriptor? CompareModel => _compareKey.Length > 0 ? _models.FirstOrDefault(m => m.Key == _compareKey) : null;
+
     private ElementReference _messagesElement;
     private ElementReference _inputElement;
     private ElementReference _chatFrameElement;
@@ -784,6 +849,7 @@
         reply.Stopped = false;
         reply.Finish = null;
         reply.IsStreaming = true;
+        reply.ModelName = model.Model;
         if (continueTurn is null)
         {
             _turns.Add(reply);
@@ -792,6 +858,16 @@
         _isStreaming = true;
         _generation = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
         var token = _generation.Token;
+
+        // A comparison answer streams in parallel into a shadow turn shown beside the reply; it is not stored
+        // unless the user keeps it. Not for continuations, which extend one specific reply.
+        Task? alternative = null;
+        if (continueTurn is null && CompareModel is { } other && other.ConnectionId != Guid.Empty)
+        {
+            var shadow = new ChatTurn(ChatRole.Assistant, "", Markdown) { ModelName = other.Model, IsStreaming = true };
+            reply.Alternative = shadow;
+            alternative = StreamIntoAsync(shadow, other, history, token);
+        }
 
         await RenderAndScrollAsync(force: true);
 
@@ -873,7 +949,7 @@
         catch (Exception ex)
         {
             _error = ex.Message;
-            if (reply.Text.Length == 0)
+            if (reply.Text.Length == 0 && reply.Alternative is null)
             {
                 _turns.Remove(reply);
             }
@@ -881,6 +957,27 @@
         finally
         {
             reply.IsStreaming = false;
+            if (alternative is not null)
+            {
+                // Keep rendering while the second model catches up; Stop cancels it through the same token.
+                while (!alternative.IsCompleted)
+                {
+                    await Task.WhenAny(alternative, Task.Delay(100));
+                    await RenderAndScrollAsync();
+                }
+                if (reply.Alternative is { } shadow)
+                {
+                    shadow.IsStreaming = false;
+                    if (alternative.IsFaulted)
+                    {
+                        shadow.Append(shadow.Text.Length == 0 ? $"({alternative.Exception?.GetBaseException().Message})" : $" ({alternative.Exception?.GetBaseException().Message})");
+                    }
+                    if (shadow.Text.Length == 0 && shadow.Reasoning.Length == 0)
+                    {
+                        reply.Alternative = null; // nothing to compare against
+                    }
+                }
+            }
             _isStreaming = false;
             _generation?.Dispose();
             _generation = null;
@@ -895,6 +992,84 @@
         }
 
         await AfterReplyContextAsync(conversationId, model);
+    }
+
+    /// <summary>Streams one model's answer into a turn (text, reasoning, finish, usage) without touching page state or the store.</summary>
+    private async Task StreamIntoAsync(ChatTurn target, ModelDescriptor model, List<ChatMessage> history, CancellationToken token)
+    {
+        var client = await Registry.GetAsync(model.ConnectionId, token);
+        var splitter = new ThinkTagSplitter();
+        await foreach (var delta in client.StreamChatAsync(model.Model, history, token))
+        {
+            if (delta.Usage is not null)
+            {
+                target.Usage = delta.Usage;
+            }
+            if (delta.Finish is { } finish)
+            {
+                target.Finish = finish;
+            }
+            if (delta.Reasoning is { } reasoning)
+            {
+                target.AppendReasoning(reasoning);
+            }
+            if (delta.Text is { } text)
+            {
+                foreach (var piece in splitter.Feed(text))
+                {
+                    if (piece.Reasoning is { } r)
+                    {
+                        target.AppendReasoning(r);
+                    }
+                    if (piece.Text is { } t)
+                    {
+                        target.Append(t);
+                    }
+                }
+            }
+        }
+        if (splitter.Flush() is { } tail)
+        {
+            if (tail.Reasoning is { } r)
+            {
+                target.AppendReasoning(r);
+            }
+            if (tail.Text is { } t)
+            {
+                target.Append(t);
+            }
+        }
+    }
+
+    /// <summary>Resolves a side-by-side comparison: keeping the alternative rewrites the stored reply with its text.</summary>
+    private async Task KeepAsync(ChatTurn turn, bool keepPrimary)
+    {
+        if (_isStreaming || turn.Alternative is not { } alt)
+        {
+            return;
+        }
+
+        if (!keepPrimary)
+        {
+            turn.TakeOver(alt);
+            if (_conversationId is { } conversationId && turn.MessageId is { } messageId)
+            {
+                try
+                {
+                    await Store.SetMessageContentAsync(conversationId, messageId, turn.Text, turn.Reasoning.Length > 0 ? turn.Reasoning : null, _disposed.Token);
+                }
+                catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    _error = $"Could not save the chosen reply: {ex.Message}";
+                }
+            }
+        }
+        turn.Alternative = null;
+        _codeBlocksDirty = true;
     }
 
     // ---- editing and regenerating ----
@@ -1832,6 +2007,30 @@
 
         /// <summary>The user pressed Stop (or the circuit dropped) before the model finished.</summary>
         public bool Stopped { get; set; }
+
+        /// <summary>Which model produced this reply, for the side-by-side labels.</summary>
+        public string? ModelName { get; set; }
+
+        /// <summary>A second model's answer to the same prompt (compare mode), shown beside this one until the user keeps one.</summary>
+        public ChatTurn? Alternative { get; set; }
+
+        /// <summary>Becomes the other answer: text, reasoning, stats and model name. Used when the user keeps the alternative.</summary>
+        public void TakeOver(ChatTurn other)
+        {
+            _text.Clear().Append(other.Text);
+            _reasoning.Clear().Append(other.Reasoning);
+            _html = null;
+            Chunks = other.Chunks;
+            Usage = other.Usage;
+            Finish = other.Finish;
+            Stopped = other.Stopped;
+            ModelName = other.ModelName;
+            _thinkingStartedAt = other._thinkingStartedAt;
+            _thinkingEndedAt = other._thinkingEndedAt;
+            _startedAt = other._startedAt;
+            _firstTokenAt = other._firstTokenAt;
+            _endedAt = other._endedAt;
+        }
 
         /// <summary>A reply cut short by the token limit or by Stop can be continued in place.</summary>
         public bool CanContinue => !IsStreaming && Text.Length > 0 && (Stopped || Finish == FinishReason.Length);
