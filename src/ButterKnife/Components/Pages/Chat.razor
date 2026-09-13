@@ -335,7 +335,16 @@
 
     @if (_error is not null)
     {
-        <div class="alert alert-danger py-1 px-2 small mb-1" role="alert">@_error</div>
+        <div class="alert alert-danger py-1 px-2 small mb-1 d-flex align-items-center gap-2" role="alert">
+            <span class="flex-grow-1">@_error</span>
+            @if (CanRetry)
+            {
+                <button type="button" class="btn btn-sm btn-outline-danger py-0" @onclick="RetryAsync" title="Send the same request again">
+                    <i class="bi bi-arrow-repeat me-1" aria-hidden="true"></i>Retry
+                </button>
+            }
+            <button type="button" class="btn-close" style="font-size: 0.6rem" aria-label="Dismiss" @onclick="() => { _error = null; _canRetry = false; }"></button>
+        </div>
     }
 
     <footer class="d-flex flex-column gap-2">
@@ -598,6 +607,12 @@
     private bool _showPersonaPrompt;
     private string _input = "";
     private string? _error;
+
+    /// <summary>The last request failed before any text arrived (the empty reply was dropped), so the same history can simply be sent again.</summary>
+    private bool _canRetry;
+
+    private bool CanRetry => _canRetry && !_isStreaming && Selected is not null && _conversationId is not null
+        && _turns.Count > 0 && _turns[^1].Role == ChatRole.User;
     private bool _isStreaming;
     private bool _loadingModels;
 
@@ -1030,6 +1045,7 @@
     /// </summary>
     private async Task StreamReplyAsync(Guid conversationId, ModelDescriptor model, List<ChatMessage> history, ChatTurn? continueTurn = null)
     {
+        _canRetry = false;
         var reply = continueTurn ?? new ChatTurn(ChatRole.Assistant, "", Markdown);
         reply.Stopped = false;
         reply.Finish = null;
@@ -1137,6 +1153,7 @@
             if (reply.Text.Length == 0 && reply.Alternative is null)
             {
                 _turns.Remove(reply);
+                _canRetry = continueTurn is null; // nothing was written, so the request can go out again as it was
             }
         }
         finally
@@ -1348,6 +1365,18 @@
         }
         _error = null;
         _contextTokens = null;
+        await StreamReplyAsync(conversationId, model, BuildHistory());
+    }
+
+    /// <summary>Sends the last request again after a failure that produced no reply (server down, bad model, network hiccup).</summary>
+    private async Task RetryAsync()
+    {
+        if (!CanRetry || Selected is not { } model || _conversationId is not { } conversationId)
+        {
+            return;
+        }
+
+        _error = null;
         await StreamReplyAsync(conversationId, model, BuildHistory());
     }
 
