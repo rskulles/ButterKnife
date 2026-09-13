@@ -93,6 +93,9 @@ class H(BaseHTTPRequestHandler):
                 return sum(1 for part in c if part.get("type") in ("image_url", "image"))
             return len(m.get("images") or [])
         tuning = {k: body[k] for k in ("options", "think", "temperature", "max_tokens", "chat_template_kwargs", "thinking") if k in body}
+        system = next((m.get("content") for m in body.get("messages", []) if m.get("role") == "system"), None)
+        if isinstance(system, str) and system:
+            print("  system:", repr(system[-160:]), flush=True)
         print("POST", self.path, body.get("model"), [(m.get("role"), imgs(m)) for m in body.get("messages", [])], tuning or "", flush=True)
         if self.path == "/api/show":
             caps = ["completion", "vision"] if body.get("model") == "fake-llama:8b" else ["completion"]

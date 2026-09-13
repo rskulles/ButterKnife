@@ -5,6 +5,20 @@ namespace ButterKnife.Tests;
 public class ConversationCompactorTests
 {
     [Fact]
+    public void ComposeSystemPrompt_PutsInstructionsBetweenPersonaAndSummary()
+    {
+        Assert.Equal("Answer in Spanish.", ConversationCompactor.ComposeSystemPrompt(null, " Answer in Spanish. ", null));
+        Assert.Equal("Be terse.", ConversationCompactor.ComposeSystemPrompt("Be terse.", "   ", null));
+
+        var all = ConversationCompactor.ComposeSystemPrompt("Be terse.", "Answer in Spanish.", "The user likes cats.")!;
+        var persona = all.IndexOf("Be terse.", StringComparison.Ordinal);
+        var preamble = all.IndexOf(ConversationCompactor.InstructionsPreamble, StringComparison.Ordinal);
+        var instructions = all.IndexOf("Answer in Spanish.", StringComparison.Ordinal);
+        var summary = all.IndexOf("The user likes cats.", StringComparison.Ordinal);
+        Assert.True(persona >= 0 && persona < preamble && preamble < instructions && instructions < summary);
+    }
+
+    [Fact]
     public void ComposeSystemPrompt_CombinesPersonaAndSummary()
     {
         Assert.Null(ConversationCompactor.ComposeSystemPrompt(null, null));

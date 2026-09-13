@@ -19,12 +19,24 @@ public sealed class ConversationCompactor
     public const string SummaryPreamble = "## Earlier in this conversation (summary)";
 
     /// <summary>System prompt for a request: the persona (if any) followed by the running summary (if any).</summary>
-    public static string? ComposeSystemPrompt(string? personaPrompt, string? summary)
+    public const string InstructionsPreamble = "For this conversation, also follow these instructions:";
+
+    public static string? ComposeSystemPrompt(string? personaPrompt, string? summary) => ComposeSystemPrompt(personaPrompt, null, summary);
+
+    /// <summary>
+    /// The system prompt for a request: the persona's prompt, then the conversation's own instructions, then the
+    /// compaction summary. Instructions without a persona are sent as they are; with one they get a short preamble.
+    /// </summary>
+    public static string? ComposeSystemPrompt(string? personaPrompt, string? instructions, string? summary)
     {
-        var parts = new List<string>(2);
+        var parts = new List<string>(3);
         if (!string.IsNullOrWhiteSpace(personaPrompt))
         {
             parts.Add(personaPrompt.Trim());
+        }
+        if (!string.IsNullOrWhiteSpace(instructions))
+        {
+            parts.Add(parts.Count == 0 ? instructions.Trim() : $"{InstructionsPreamble}\n\n{instructions.Trim()}");
         }
         if (!string.IsNullOrWhiteSpace(summary))
         {

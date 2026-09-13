@@ -20,4 +20,7 @@ public sealed record Conversation(
 {
     /// <summary>Sampling settings for this conversation; <see cref="ChatOptions.Default"/> means the server's defaults.</summary>
     public ChatOptions Options { get; init; } = ChatOptions.Default;
+
+    /// <summary>Extra instructions sent with every request in this conversation, on top of the persona's prompt; null for none.</summary>
+    public string? Instructions { get; init; }
 }

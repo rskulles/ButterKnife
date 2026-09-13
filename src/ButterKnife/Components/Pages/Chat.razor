@@ -74,7 +74,34 @@
                 title="Show this persona's system prompt">
             @(_showPersonaPrompt ? "Hide prompt" : "Show prompt")
         </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap position-relative d-inline-flex align-items-center gap-1"
+                @onclick="ToggleInstructions" aria-expanded="@_showInstructions" aria-controls="chat-instructions"
+                title="Extra instructions for this chat, sent with every request on top of the persona">
+            <i class="bi bi-chat-square-text" aria-hidden="true"></i><span class="d-none d-md-inline">Instructions</span>
+            @if (!string.IsNullOrWhiteSpace(_instructions))
+            {
+                <span class="position-absolute top-0 start-100 translate-middle p-1 bg-primary border border-light rounded-circle" aria-hidden="true"></span>
+            }
+        </button>
     </header>
+
+    @if (_showInstructions)
+    {
+        <div id="chat-instructions" class="p-2 border rounded bg-body-tertiary">
+            <label class="form-label small mb-1" for="instructions-text">Instructions for this chat</label>
+            <textarea id="instructions-text" class="form-control form-control-sm" rows="3" @bind="_instructionsDraft" @bind:event="oninput"
+                      placeholder="e.g. Answer in Spanish. Keep replies under 100 words. We are working on the Acme project."></textarea>
+            <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+                <button type="button" class="btn btn-sm btn-primary" @onclick="SaveInstructionsAsync" disabled="@(_instructionsDraft.Trim() == (_instructions ?? ""))">Save</button>
+                @if (!string.IsNullOrWhiteSpace(_instructions))
+                {
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="ClearInstructionsAsync">Clear</button>
+                }
+                <button type="button" class="btn btn-sm btn-link" @onclick="() => _showInstructions = false">Close</button>
+                <span class="small text-body-secondary ms-auto">Sent with every request in this chat, after the persona's prompt. Saved with the chat.</span>
+            </div>
+        </div>
+    }
 
     @if (_showPersonaPrompt && SelectedPersona is { } persona)
     {
@@ -600,6 +627,11 @@
     private ChatOptions _options = ChatOptions.Default;
     private bool _showModelSettings;
 
+    /// <summary>Per-chat instructions (see ConversationCompactor.ComposeSystemPrompt); like the options, held in memory for a new chat.</summary>
+    private string? _instructions;
+    private bool _showInstructions;
+    private string _instructionsDraft = "";
+
     private ElementReference _messagesElement;
     private ElementReference _inputElement;
     private ElementReference _chatFrameElement;
@@ -714,6 +746,9 @@
         _conversationId = Id;
         _title = null;
         _options = ChatOptions.Default;
+        _instructions = null;
+        _instructionsDraft = "";
+        _showInstructions = false;
         _personaKey = DefaultPersonaKey();
         await (_compaction?.CancelAsync()??Task.CompletedTask);
         _summary = null;
@@ -740,6 +775,8 @@
         _title = conversation.Title;
         _personaKey = conversation.PersonaId?.ToString() ?? "";
         _options = conversation.Options;
+        _instructions = conversation.Instructions;
+        _instructionsDraft = _instructions ?? "";
         _summary = conversation.Summary;
         _summaryThrough = Math.Min(conversation.SummaryThrough ?? 0, conversation.Messages.Count);
         _contextTokens = conversation.ContextTokens;
@@ -1505,12 +1542,53 @@
         {
             await Store.SetOptionsAsync(conversation.Id, _options, _disposed.Token);
         }
+        if (_instructions is not null)
+        {
+            await Store.SetInstructionsAsync(conversation.Id, _instructions, _disposed.Token);
+        }
         _conversationId = conversation.Id;
         _title = title;
         _titlePending = true;
         Events.NotifyChanged();
         Nav.NavigateTo($"/chat/{conversation.Id}", replace: true); // same component instance; OnParametersSetAsync sees the id already loaded
         return conversation.Id;
+    }
+
+    private void ToggleInstructions()
+    {
+        _showInstructions = !_showInstructions;
+        if (_showInstructions)
+        {
+            _instructionsDraft = _instructions ?? "";
+        }
+    }
+
+    private Task SaveInstructionsAsync() => SetInstructionsAsync(_instructionsDraft);
+
+    private Task ClearInstructionsAsync() => SetInstructionsAsync(null);
+
+    /// <summary>Persists the per-chat instructions; a new conversation gets them when it is created.</summary>
+    private async Task SetInstructionsAsync(string? text)
+    {
+        _instructions = string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+        _instructionsDraft = _instructions ?? "";
+        _contextTokens = null; // the next request carries a different system prompt; estimate again
+        if (_conversationId is not { } id)
+        {
+            return;
+        }
+
+        try
+        {
+            await Store.SetInstructionsAsync(id, _instructions, _disposed.Token);
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = $"Instructions were not saved: {ex.Message}";
+        }
     }
 
     private string ThinkOptionValue => _options.Think switch { true => "on", false => "off", _ => "" };
@@ -1864,7 +1942,7 @@
     private List<ChatMessage> BuildHistory()
     {
         var history = new List<ChatMessage>();
-        if (ConversationCompactor.ComposeSystemPrompt(SelectedPersona?.SystemPrompt, _summary) is { } system)
+        if (ConversationCompactor.ComposeSystemPrompt(SelectedPersona?.SystemPrompt, _instructions, _summary) is { } system)
         {
             history.Add(new ChatMessage(ChatRole.System, system));
         }
