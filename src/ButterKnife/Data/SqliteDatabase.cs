@@ -223,6 +223,8 @@ public sealed class SqliteDatabase
             await AddColumnIfMissingAsync(connection, "conversations", "max_tokens", "INTEGER NULL", cancellationToken);
             await AddColumnIfMissingAsync(connection, "conversations", "think", "INTEGER NULL", cancellationToken);
             await AddColumnIfMissingAsync(connection, "conversations", "instructions", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, "messages", "model", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, "messages", "stats", "TEXT NULL", cancellationToken);
 
             await SeedPersonasAsync(connection, cancellationToken);
             _initialized = true;

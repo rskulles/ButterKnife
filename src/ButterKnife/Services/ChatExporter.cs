@@ -31,7 +31,12 @@ public static class ChatExporter
             sb.AppendLine();
             sb.AppendLine("---");
             sb.AppendLine();
-            sb.Append("**").Append(message.Role == ChatRole.User ? userLabel : "Assistant").Append("**");
+            sb.Append("**").Append(message.Role == ChatRole.User ? userLabel : "Assistant");
+            if (message.Role == ChatRole.Assistant && !string.IsNullOrWhiteSpace(message.Model))
+            {
+                sb.Append(" (").Append(message.Model).Append(')');
+            }
+            sb.Append("**");
             if (message.CreatedAt is { } at)
             {
                 sb.Append(" · ").Append(When(at));

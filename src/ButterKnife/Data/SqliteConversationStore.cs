@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ButterKnife.Services;
 using Microsoft.Data.Sqlite;
 
@@ -108,14 +109,16 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         {
             insert.Transaction = (SqliteTransaction)tx;
             insert.CommandText = """
-                INSERT INTO messages (conversation_id, role, content, reasoning, created_at)
-                VALUES ($cid, $role, $content, $reasoning, $now);
+                INSERT INTO messages (conversation_id, role, content, reasoning, created_at, model, stats)
+                VALUES ($cid, $role, $content, $reasoning, $now, $model, $stats);
                 SELECT last_insert_rowid();
                 """;
             insert.Parameters.AddWithValue("$cid", conversationId.ToString("D"));
             insert.Parameters.AddWithValue("$role", message.Role.ToString());
             insert.Parameters.AddWithValue("$content", message.Content);
             insert.Parameters.AddWithValue("$reasoning", (object?)message.Reasoning ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$model", (object?)message.Model ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$stats", (object?)SerializeStats(message.Stats) ?? DBNull.Value);
             insert.Parameters.AddWithValue("$now", now);
             messageId = (long)(await insert.ExecuteScalarAsync(cancellationToken))!;
         }
@@ -135,21 +138,41 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         return messageId;
     }
 
-    public async Task SetMessageContentAsync(Guid conversationId, long messageId, string content, string? reasoning, CancellationToken cancellationToken = default)
+    public async Task SetMessageContentAsync(Guid conversationId, long messageId, string content, string? reasoning, string? model = null, GenerationStats? stats = null, CancellationToken cancellationToken = default)
     {
         await using var connection = await db.OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            UPDATE messages SET content = $content, reasoning = $reasoning WHERE conversation_id = $cid AND id = $mid;
+            UPDATE messages SET content = $content, reasoning = $reasoning, model = COALESCE($model, model), stats = COALESCE($stats, stats)
+            WHERE conversation_id = $cid AND id = $mid;
             UPDATE conversations SET updated_at = $now WHERE id = $cid;
             """;
         cmd.Parameters.AddWithValue("$cid", conversationId.ToString("D"));
         cmd.Parameters.AddWithValue("$mid", messageId);
         cmd.Parameters.AddWithValue("$content", content);
         cmd.Parameters.AddWithValue("$reasoning", (object?)reasoning ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$model", (object?)model ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$stats", (object?)SerializeStats(stats) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$now", SqliteDatabase.Format(DateTimeOffset.UtcNow));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    /// <summary>Stats are a small JSON blob: they are only ever shown, never queried.</summary>
+    private static string? SerializeStats(GenerationStats? stats) => stats is null ? null : JsonSerializer.Serialize(stats, StatsJson);
+
+    private static GenerationStats? DeserializeStats(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<GenerationStats>(json, StatsJson);
+        }
+        catch (JsonException)
+        {
+            return null; // a blob from a future version we cannot read; the reply is still fine
+        }
+    }
+
+    private static readonly JsonSerializerOptions StatsJson = new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
 
     public async Task DeleteMessageAsync(Guid conversationId, long messageId, CancellationToken cancellationToken = default)
     {
@@ -349,7 +372,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         }
 
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT id, role, content, created_at, reasoning FROM messages WHERE conversation_id = $cid ORDER BY id;";
+        cmd.CommandText = "SELECT id, role, content, created_at, reasoning, model, stats FROM messages WHERE conversation_id = $cid ORDER BY id;";
         cmd.Parameters.AddWithValue("$cid", id.ToString("D"));
 
         var messages = new List<ChatMessage>();
@@ -365,6 +388,8 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
                 Id = messageId,
                 CreatedAt = SqliteDatabase.Parse(reader.GetString(3)),
                 Reasoning = reader.IsDBNull(4) ? null : reader.GetString(4),
+                Model = reader.IsDBNull(5) ? null : reader.GetString(5),
+                Stats = reader.IsDBNull(6) ? null : DeserializeStats(reader.GetString(6)),
             });
         }
         return messages;

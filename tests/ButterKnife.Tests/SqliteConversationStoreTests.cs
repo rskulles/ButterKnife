@@ -256,7 +256,7 @@ public sealed class SqliteConversationStoreTests : IDisposable
         var conv = await _store.CreateAsync("t", Guid.NewGuid(), "m", null, CancellationToken.None);
         var id = await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.Assistant, "partial") { Reasoning = "r" }, CancellationToken.None);
 
-        await _store.SetMessageContentAsync(conv.Id, id, "partial and the rest", "r more", CancellationToken.None);
+        await _store.SetMessageContentAsync(conv.Id, id, "partial and the rest", "r more", cancellationToken: CancellationToken.None);
 
         var loaded = (await _store.GetAsync(conv.Id, CancellationToken.None))!;
         Assert.Equal("partial and the rest", loaded.Messages[0].Content);
@@ -308,6 +308,33 @@ public sealed class SqliteConversationStoreTests : IDisposable
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM message_images;";
         Assert.Equal(0L, await cmd.ExecuteScalarAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StoresModelAndStatsWithRepliesAndKeepsThemUnlessReplaced()
+    {
+        var conv = await _store.CreateAsync("t", ConnA, "m", null, CancellationToken.None);
+        var stats = new GenerationStats(TimeSpan.FromSeconds(2.5), TimeSpan.FromMilliseconds(300), 40, new TokenUsage(120, 38, TimeSpan.FromMilliseconds(180), TimeSpan.FromSeconds(2)));
+        var userId = await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.User, "hi"), CancellationToken.None);
+        var replyId = await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.Assistant, "hey") { Model = "qwen3", Stats = stats }, CancellationToken.None);
+
+        var loaded = (await _store.GetAsync(conv.Id, CancellationToken.None))!.Messages;
+        Assert.Null(loaded[0].Model);
+        Assert.Null(loaded[0].Stats);
+        Assert.Equal("qwen3", loaded[1].Model);
+        Assert.Equal(stats, loaded[1].Stats);
+
+        await _store.SetMessageContentAsync(conv.Id, replyId, "hey there", null, cancellationToken: CancellationToken.None);
+        loaded = (await _store.GetAsync(conv.Id, CancellationToken.None))!.Messages;
+        Assert.Equal("qwen3", loaded[1].Model);
+        Assert.Equal(stats, loaded[1].Stats);
+
+        var more = stats with { Chunks = 60 };
+        await _store.SetMessageContentAsync(conv.Id, replyId, "hey there, friend", null, "llama3", more, CancellationToken.None);
+        loaded = (await _store.GetAsync(conv.Id, CancellationToken.None))!.Messages;
+        Assert.Equal("llama3", loaded[1].Model);
+        Assert.Equal(more, loaded[1].Stats);
+        Assert.Equal(userId, loaded[0].Id);
     }
 
     public void Dispose()

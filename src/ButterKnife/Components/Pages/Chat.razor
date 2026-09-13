@@ -153,6 +153,10 @@
             <div class="msg mb-3 msg-@turn.Role.ToString().ToLowerInvariant() @(turn.Role == ChatRole.User ? "ms-auto" : "")">
                 <div class="small text-body-secondary @(turn.Role == ChatRole.User ? "text-end" : "")">
                     <span class="text-uppercase">@(turn.Role == ChatRole.User ? _displayName : "Assistant")</span>
+                    @if (turn.Role == ChatRole.Assistant && turn.ModelName is { } modelName && turn.Alternative is null)
+                    {
+                        <span class="ms-2" title="The model that wrote this reply"><i class="bi bi-cpu me-1" aria-hidden="true"></i>@modelName</span>
+                    }
                     @if (turn.CreatedAt is { } at)
                     {
                         <time class="msg-time ms-2" datetime="@at.ToString("O")" title="@at.LocalDateTime.ToString("f")">@FormatWhen(at)</time>
@@ -212,12 +216,12 @@
                     {
                         <ButterKnifeThrobber Stats="turn.GetStats"/>
                     }
-                    else if (turn.Chunks > 0 || turn.Note is not null)
+                    else if (turn.DisplayStats is not null || turn.Note is not null)
                     {
                         <div class="small text-body-secondary mt-1" title="@ButterKnifeThrobber.StatsTooltip">
-                            @(turn.Chunks > 0 ? ButterKnifeThrobber.FormatStats(turn.GetStats()) : "")@if (turn.Note is { } note)
+                            @(turn.DisplayStats is { } stats ? ButterKnifeThrobber.FormatStats(stats) : "")@if (turn.Note is { } note)
                             {
-                                <span class="text-warning-emphasis">@(turn.Chunks > 0 ? " · " : "")@note</span>
+                                <span class="text-warning-emphasis">@(turn.DisplayStats is not null ? " · " : "")@note</span>
                             }
                         </div>
                     }
@@ -798,7 +802,13 @@
         _contextWindow = conversation.ContextWindow;
         foreach (var message in conversation.Messages)
         {
-            _turns.Add(new ChatTurn(message.Role, message.Content, Markdown, message.Images, message.Reasoning) { MessageId = message.Id, CreatedAt = message.CreatedAt });
+            _turns.Add(new ChatTurn(message.Role, message.Content, Markdown, message.Images, message.Reasoning)
+            {
+                MessageId = message.Id,
+                CreatedAt = message.CreatedAt,
+                ModelName = message.Model,
+                StoredStats = message.Stats,
+            });
         }
 
         _codeBlocksDirty = true;
@@ -1257,7 +1267,7 @@
             {
                 try
                 {
-                    await Store.SetMessageContentAsync(conversationId, messageId, turn.Text, turn.Reasoning.Length > 0 ? turn.Reasoning : null, _disposed.Token);
+                    await Store.SetMessageContentAsync(conversationId, messageId, turn.Text, turn.Reasoning.Length > 0 ? turn.Reasoning : null, turn.ModelName, turn.GetStats(), _disposed.Token); // the kept alternative's model and stats
                 }
                 catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
                 {
@@ -1684,11 +1694,11 @@
             var reasoning = reply.Reasoning.Length > 0 ? reply.Reasoning : null;
             if (reply.MessageId is { } existing)
             {
-                await Store.SetMessageContentAsync(conversationId, existing, text, reasoning, CancellationToken.None); // continued reply
+                await Store.SetMessageContentAsync(conversationId, existing, text, reasoning, reply.ModelName, reply.GetStats(), CancellationToken.None); // continued reply
             }
             else
             {
-                reply.MessageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.Assistant, text) { Reasoning = reasoning }, CancellationToken.None);
+                reply.MessageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.Assistant, text) { Reasoning = reasoning, Model = reply.ModelName, Stats = reply.GetStats() }, CancellationToken.None);
                 reply.CreatedAt = DateTimeOffset.Now;
             }
             Events.NotifyChanged();
@@ -2325,8 +2335,14 @@
         /// <summary>The user pressed Stop (or the circuit dropped) before the model finished.</summary>
         public bool Stopped { get; set; }
 
-        /// <summary>Which model produced this reply, for the side-by-side labels.</summary>
+        /// <summary>Which model produced this reply: shown in the speaker line and stored with the message.</summary>
         public string? ModelName { get; set; }
+
+        /// <summary>Stats loaded from the store for a reply that streamed in an earlier session.</summary>
+        public GenerationStats? StoredStats { get; set; }
+
+        /// <summary>What the stats line shows: this session's measurements once the reply has streamed here, else what was stored.</summary>
+        public GenerationStats? DisplayStats => _startedAt != 0 ? (Chunks > 0 ? GetStats() : null) : StoredStats;
 
         /// <summary>A second model's answer to the same prompt (compare mode), shown beside this one until the user keeps one.</summary>
         public ChatTurn? Alternative { get; set; }
@@ -2342,6 +2358,7 @@
             Finish = other.Finish;
             Stopped = other.Stopped;
             ModelName = other.ModelName;
+            StoredStats = other.StoredStats;
             _thinkingStartedAt = other._thinkingStartedAt;
             _thinkingEndedAt = other._thinkingEndedAt;
             _startedAt = other._startedAt;

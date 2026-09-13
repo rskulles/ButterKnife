@@ -35,6 +35,12 @@ public sealed record ChatMessage(ChatRole Role, string Content, IReadOnlyList<Ch
     /// <summary>The model's visible reasoning for an assistant reply, kept for display only; clients never send it back.</summary>
     public string? Reasoning { get; init; }
 
+    /// <summary>Which model wrote an assistant reply; null for user messages and replies stored before this was recorded.</summary>
+    public string? Model { get; init; }
+
+    /// <summary>Timing and token counts of an assistant reply as measured when it streamed; null when unknown.</summary>
+    public GenerationStats? Stats { get; init; }
+
     public IReadOnlyList<ChatImage> Images { get; init; } = Images ?? NoImages;
 
     public bool HasImages => Images.Count > 0;

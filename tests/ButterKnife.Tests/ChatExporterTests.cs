@@ -12,7 +12,7 @@ public sealed class ChatExporterTests
         var conversation = new Conversation(Guid.NewGuid(), "Word Frequencies", Guid.NewGuid(), "qwen3", null, null, null, null, null, at, at,
         [
             new ChatMessage(ChatRole.User, "Count words?", [new ChatImage("image/png", [1, 2, 3])]) { Id = 1, CreatedAt = at },
-            new ChatMessage(ChatRole.Assistant, "Use `Counter`.\n\n```python\nfrom collections import Counter\n```\n") { Id = 2, CreatedAt = at.AddMinutes(1), Reasoning = "They want a quick answer." },
+            new ChatMessage(ChatRole.Assistant, "Use `Counter`.\n\n```python\nfrom collections import Counter\n```\n") { Id = 2, CreatedAt = at.AddMinutes(1), Reasoning = "They want a quick answer.", Model = "qwen3" },
         ]);
 
         var markdown = ChatExporter.ToMarkdown(conversation, "Skully", "Programmer", at.AddDays(1));
@@ -21,7 +21,7 @@ public sealed class ChatExporterTests
         Assert.Contains("Model: qwen3. Persona: Programmer.", markdown);
         Assert.Contains("**Skully** · ", markdown);
         Assert.Contains("*1 image attached*", markdown);
-        Assert.Contains("**Assistant** · ", markdown);
+        Assert.Contains("**Assistant (qwen3)** · ", markdown);
         Assert.Contains("<summary>Reasoning</summary>\n\nThey want a quick answer.\n", markdown);
         Assert.Contains("```python\nfrom collections import Counter\n```", markdown);
         Assert.EndsWith("```\n", markdown);
