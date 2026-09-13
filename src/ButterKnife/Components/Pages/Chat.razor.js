@@ -94,6 +94,36 @@ export function takeDroppedImage() {
     return droppedImages.shift() ?? new Uint8Array(0);
 }
 
+// ---- Read aloud --------------------------------------------------------------------------------
+// Browser speech synthesis over the rendered reply's text (so Markdown syntax is not read out). One reply at a
+// time; .NET is told when it ends so the button flips back.
+let speechComponent = null;
+
+export function speakMessage(messageId, component) {
+    if (!("speechSynthesis" in window)) {
+        return false;
+    }
+    const bubble = document.querySelector(`[data-message-id="${messageId}"]`);
+    const text = bubble?.innerText?.trim();
+    if (!text) {
+        return false;
+    }
+    window.speechSynthesis.cancel();
+    speechComponent = component;
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = document.documentElement.lang || navigator.language;
+    const done = () => { if (speechComponent === component) { speechComponent = null; component.invokeMethodAsync("OnSpeechEnded"); } };
+    utterance.onend = done;
+    utterance.onerror = done;
+    window.speechSynthesis.speak(utterance);
+    return true;
+}
+
+export function stopSpeaking() {
+    speechComponent = null;
+    window.speechSynthesis?.cancel();
+}
+
 // ---- Math and diagrams --------------------------------------------------------------------------
 // Markdig marks TeX as <span class="math">\(..\)</span> / <div class="math">\[..\]</div> and ```mermaid fences as
 // <div class="mermaid">. KaTeX and Mermaid are vendored but heavy, so each is loaded the first time a transcript needs

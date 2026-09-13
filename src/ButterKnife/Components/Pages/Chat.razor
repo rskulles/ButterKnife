@@ -110,7 +110,7 @@
                             <div class="prewrap text-body-secondary mt-1 px-2">@turn.Reasoning</div>
                         </details>
                     }
-                    <div
+                    <div data-message-id="@turn.MessageId"
                         class="msg-bubble msg-markdown px-3 py-2 rounded-3 bg-body-tertiary text-break">@turn.Html@(turn.IsStreaming ? "▍" : "")</div>
                     @if (turn.IsStreaming)
                     {
@@ -194,6 +194,11 @@
                             }
                             @if (turn.Role == ChatRole.Assistant)
                             {
+                                <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary"
+                                        title="@(_speaking == turn ? "Stop reading" : "Read this reply aloud")" aria-label="@(_speaking == turn ? "Stop reading" : "Read this reply aloud")"
+                                        @onclick="() => ToggleSpeechAsync(turn)">
+                                    <i class="bi @(_speaking == turn ? "bi-stop-circle" : "bi-volume-up")" aria-hidden="true"></i>
+                                </button>
                                 <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Copy the reply as Markdown"
                                         aria-label="Copy the reply as Markdown" @onclick="() => CopyReplyAsync(turn)">
                                     <i class="bi @(_copied == turn ? "bi-clipboard-check" : "bi-clipboard")" aria-hidden="true"></i>@(_copied == turn ? " Copied" : "")
@@ -437,6 +442,9 @@
 
     /// <summary>The reply most recently copied, for the brief "Copied" feedback.</summary>
     private ChatTurn? _copied;
+
+    /// <summary>The reply being read aloud by the browser's speech synthesis, if any.</summary>
+    private ChatTurn? _speaking;
 
     private ElementReference _messagesElement;
     private ElementReference _inputElement;
@@ -983,6 +991,43 @@
         }
     }
 
+    /// <summary>Reads the rendered reply with the browser's own speech synthesis; clicking again (or another reply) stops it.</summary>
+    private async Task ToggleSpeechAsync(ChatTurn turn)
+    {
+        if (_js is null || turn.MessageId is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_speaking == turn)
+            {
+                await _js.InvokeVoidAsync("stopSpeaking");
+                _speaking = null;
+                return;
+            }
+
+            var started = await _js.InvokeAsync<bool>("speakMessage", turn.MessageId, _self);
+            _speaking = started ? turn : null;
+            if (!started)
+            {
+                _error = "This browser has no speech synthesis, or the reply is empty.";
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    /// <summary>JS callback when speech finishes or is cancelled.</summary>
+    [JSInvokable]
+    public Task OnSpeechEnded()
+    {
+        _speaking = null;
+        return InvokeAsync(StateHasChanged);
+    }
+
     /// <summary>Copies the reply's source Markdown (not the rendered HTML), so it pastes cleanly into notes and editors.</summary>
     private async Task CopyReplyAsync(ChatTurn turn)
     {
@@ -1194,6 +1239,16 @@
 
     public async ValueTask DisposeAsync()
     {
+        if (_js is not null && _speaking is not null)
+        {
+            try
+            {
+                await _js.InvokeVoidAsync("stopSpeaking");
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
         ConnectionEvents.Changed -= OnConnectionsChanged;
         Events.Changed -= OnConversationsChanged;
         SettingsEvents.Changed -= OnSettingsChanged;
