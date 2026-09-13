@@ -29,7 +29,11 @@
          leaves it corrupt (AccessViolation on every later start), and on macOS the file beside the executable can
          be code-signed and notarized with the rest of the bundle. -->
     <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- Single-file compression stays off on macOS: under the hardened runtime on macOS 26 the framework's precompiled
+         code, decompressed into anonymous executable memory, loses execute permission on worker threads and the
+         server dies with random AccessViolations on first browser load (reproduced 11/12 compressed vs 0/6 not).
+         The .dmg is compressed anyway, so the download size is about the same. -->
+    <EnableCompressionInSingleFile Condition="!$(RuntimeIdentifier.StartsWith('osx'))">true</EnableCompressionInSingleFile>
     <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
     <DebugType>none</DebugType>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
