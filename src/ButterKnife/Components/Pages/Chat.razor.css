@@ -19,6 +19,19 @@
     min-height: 0;
 }
 
+/* "Jump to latest" pill, floated over the bottom of the transcript while the reader has scrolled up. The frame is
+   the positioning context; the pill is appended to it by the JS module. */
+.chat-frame {
+    position: relative;
+}
+
+.chat-frame ::deep .jump-to-latest {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 5; /* bottom is set by the JS module from the transcript's edge */
+}
+
 /* A transcript entry hugs its content instead of stretching to the cap, so short messages get small bubbles.
    ms-auto on user entries keeps them right-aligned; the label and stats line inside follow the bubble's width. */
 .msg {

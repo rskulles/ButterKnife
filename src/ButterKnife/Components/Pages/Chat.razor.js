@@ -152,9 +152,85 @@ export async function copyText(text) {
     }
 }
 
-export function scrollToBottom(el) {
-    if (el) {
+// ---- Auto-scroll that yields to the reader ---------------------------------------------------------
+// While a reply streams the transcript follows the newest text, unless the user has scrolled up to read; then it
+// stays put and a "Jump to latest" pill appears. Scrolling back near the bottom (or clicking the pill) re-pins.
+const NEAR_BOTTOM_PX = 48;
+
+export function wireScroll(el) {
+    if (!el || el.dataset.scrollWired === "1") {
+        return;
+    }
+    el.dataset.scrollWired = "1";
+    el.dataset.pinned = "1";
+
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "btn btn-sm btn-primary rounded-pill shadow jump-to-latest";
+    pill.innerHTML = '<i class="bi bi-arrow-down" aria-hidden="true"></i> Jump to latest';
+    pill.hidden = true;
+    pill.addEventListener("click", () => {
+        el.dataset.pinned = "1";
         el.scrollTop = el.scrollHeight;
+        pill.hidden = true;
+    });
+    el.parentElement.appendChild(pill);
+
+    // Intent to read comes from input, not from position: a wheel/touch/key scroll upward unpins synchronously, before
+    // the next streaming render can drag the view back down. Reaching the bottom again re-pins.
+    const unpin = () => {
+        el.dataset.pinned = "0";
+        showPill(el, !!el.dataset.streaming);
+    };
+    el.addEventListener("wheel", (e) => { if (e.deltaY < 0) { unpin(); } }, { passive: true });
+    el.addEventListener("touchmove", unpin, { passive: true });
+    el.addEventListener("keydown", (e) => { if (["ArrowUp", "PageUp", "Home"].includes(e.key)) { unpin(); } });
+
+    let lastTop = el.scrollTop;
+    el.addEventListener("scroll", () => {
+        const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+        if (el.scrollTop < lastTop - 1) {
+            el.dataset.pinned = "0"; // moved up: only the user does that (scrollbar drag included)
+        } else if (nearBottom) {
+            el.dataset.pinned = "1";
+        }
+        lastTop = el.scrollTop;
+        showPill(el, el.dataset.pinned === "0" && !!el.dataset.streaming);
+    });
+    el._jumpPill = pill;
+}
+
+// The pill floats just above the bottom edge of the transcript, whatever height the composer below it has.
+function showPill(el, show) {
+    const pill = el._jumpPill;
+    if (!pill) {
+        return;
+    }
+    if (show) {
+        const frame = el.parentElement.getBoundingClientRect();
+        const messages = el.getBoundingClientRect();
+        pill.style.bottom = `${Math.round(frame.bottom - messages.bottom + 12)}px`;
+    }
+    pill.hidden = !show;
+}
+
+export function scrollToBottom(el, force = false, streaming = false) {
+    if (!el) {
+        return;
+    }
+    if (streaming) {
+        el.dataset.streaming = "1";
+    } else {
+        delete el.dataset.streaming;
+    }
+    if (force) {
+        el.dataset.pinned = "1";
+    }
+    if (el.dataset.pinned !== "0") {
+        el.scrollTop = el.scrollHeight;
+        showPill(el, false);
+    } else {
+        showPill(el, streaming);
     }
 }
 

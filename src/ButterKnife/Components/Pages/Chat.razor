@@ -573,6 +573,7 @@
             // The textarea element survives re-renders (only its attributes change), so one wiring is enough.
             await _js.InvokeVoidAsync("wireInput", _inputElement, _self);
             await _js.InvokeVoidAsync("wireImageInput", _chatFrameElement, _inputElement, _self);
+            await _js.InvokeVoidAsync("wireScroll", _messagesElement);
 
             // Per-browser overrides of the dictation defaults.
             var prefs = await _js.InvokeAsync<DictationPrefs?>("loadDictationPrefs");
@@ -764,7 +765,7 @@
         _generation = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
         var token = _generation.Token;
 
-        await RenderAndScrollAsync();
+        await RenderAndScrollAsync(force: true);
 
         string? completedText = null;
         TokenUsage? usage = null;
@@ -1094,14 +1095,15 @@
         return firstLine.Length <= MaxTitleLength ? firstLine : firstLine[..MaxTitleLength].TrimEnd() + "…";
     }
 
-    private async Task RenderAndScrollAsync()
+    /// <summary>Re-renders and follows the newest text, unless the reader has scrolled up (a sent message always re-pins).</summary>
+    private async Task RenderAndScrollAsync(bool force = false)
     {
         await InvokeAsync(StateHasChanged);
         if (_js is not null)
         {
             try
             {
-                await _js.InvokeVoidAsync("scrollToBottom", _messagesElement);
+                await _js.InvokeVoidAsync("scrollToBottom", _messagesElement, force, _isStreaming);
             }
             catch (JSDisconnectedException)
             {
