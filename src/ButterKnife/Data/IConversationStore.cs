@@ -41,5 +41,12 @@ public interface IConversationStore
     /// <summary>Last reported context usage and the model's window, for the context meter.</summary>
     Task SetContextUsageAsync(Guid conversationId, int? contextTokens, int? contextWindow, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// A new conversation with the same connection, model and persona, holding copies of the messages up to and
+    /// including <paramref name="throughMessageId"/> (images and reasoning included). The compaction summary comes
+    /// along only if it still covers a prefix of the copied messages.
+    /// </summary>
+    Task<Conversation> BranchAsync(Guid conversationId, long throughMessageId, string title, CancellationToken cancellationToken = default);
+
     Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
 }

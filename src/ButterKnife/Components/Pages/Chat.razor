@@ -208,6 +208,10 @@
                                     <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
                                 </button>
                             }
+                            <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Branch: start a new chat from here, keeping everything up to this message"
+                                    aria-label="Branch the conversation from here" @onclick="() => BranchAsync(turn)" disabled="@_isStreaming">
+                                <i class="bi bi-signpost-split" aria-hidden="true"></i>
+                            </button>
                             <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Delete"
                                     aria-label="Delete this message" @onclick="() => _confirmDelete = turn" disabled="@_isStreaming">
                                 <i class="bi bi-trash" aria-hidden="true"></i>
@@ -947,6 +951,30 @@
             history[^1] = history[^1] with { Content = history[^1].Content.TrimEnd() };
         }
         await StreamReplyAsync(conversationId, model, history, last);
+    }
+
+    /// <summary>Copies the conversation up to this message into a new one and opens it; the original stays as it is.</summary>
+    private async Task BranchAsync(ChatTurn turn)
+    {
+        if (_isStreaming || _conversationId is not { } conversationId || turn.MessageId is not { } messageId)
+        {
+            return;
+        }
+
+        try
+        {
+            var title = MakeTitle($"{_title ?? "Chat"} (branch)");
+            var branch = await Store.BranchAsync(conversationId, messageId, title, _disposed.Token);
+            Events.NotifyChanged();
+            Nav.NavigateTo($"/chat/{branch.Id}");
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not branch the conversation: {ex.Message}";
+        }
     }
 
     /// <summary>Copies the reply's source Markdown (not the rendered HTML), so it pastes cleanly into notes and editors.</summary>

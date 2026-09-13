@@ -252,6 +252,28 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task<Conversation> BranchAsync(Guid conversationId, long throughMessageId, string title, CancellationToken cancellationToken = default)
+    {
+        var source = await GetAsync(conversationId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Conversation {conversationId} does not exist.");
+        var kept = source.Messages.TakeWhile(m => m.Id <= throughMessageId).ToList();
+        if (kept.Count == 0 || kept[^1].Id != throughMessageId)
+        {
+            throw new KeyNotFoundException($"Message {throughMessageId} is not in conversation {conversationId}.");
+        }
+
+        var branch = await CreateAsync(title, source.ConnectionId, source.Model, source.PersonaId, cancellationToken);
+        foreach (var message in kept)
+        {
+            await AppendMessageAsync(branch.Id, message, cancellationToken);
+        }
+        if (source.Summary is not null && source.SummaryThrough is { } through && through <= kept.Count)
+        {
+            await SetSummaryAsync(branch.Id, source.Summary, through, cancellationToken);
+        }
+        return (await GetAsync(branch.Id, cancellationToken))!;
+    }
+
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
         await using var connection = await db.OpenAsync(cancellationToken);

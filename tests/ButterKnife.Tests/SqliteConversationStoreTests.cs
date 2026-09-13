@@ -264,6 +264,35 @@ public sealed class SqliteConversationStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task BranchCopiesMessagesUpToAPoint_WithImagesReasoningAndAFittingSummary()
+    {
+        var persona = DefaultPersonas.All[0].Id; // must exist: persona_id is a foreign key
+        var conv = await _store.CreateAsync("origin", ConnA, "llama3", persona, CancellationToken.None);
+        var m1 = await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.User, "look", [new ChatImage("image/png", [9, 9])]), CancellationToken.None);
+        var m2 = await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.Assistant, "a") { Reasoning = "r" }, CancellationToken.None);
+        var m3 = await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.User, "later"), CancellationToken.None);
+        await _store.SetSummaryAsync(conv.Id, "sum", 2, CancellationToken.None);
+
+        var branch = await _store.BranchAsync(conv.Id, m2, "origin (branch)", CancellationToken.None);
+
+        Assert.NotEqual(conv.Id, branch.Id);
+        Assert.Equal("origin (branch)", branch.Title);
+        Assert.Equal((ConnA, "llama3", persona), (branch.ConnectionId, branch.Model, branch.PersonaId));
+        Assert.Equal(["look", "a"], branch.Messages.Select(m => m.Content));
+        Assert.Equal([9, 9], branch.Messages[0].Images[0].Data);
+        Assert.Equal("r", branch.Messages[1].Reasoning);
+        Assert.Equal(("sum", 2), (branch.Summary, branch.SummaryThrough));
+        Assert.NotEqual(branch.Messages[0].Id, m1);
+
+        // Branching before the summary's checkpoint drops the summary; the original is untouched.
+        var earlier = await _store.BranchAsync(conv.Id, m1, "b2", CancellationToken.None);
+        Assert.Single(earlier.Messages);
+        Assert.Null(earlier.Summary);
+        Assert.Equal(3, (await _store.GetAsync(conv.Id, CancellationToken.None))!.Messages.Count);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => _store.BranchAsync(conv.Id, m3 + 100, "x", CancellationToken.None));
+    }
+
+    [Fact]
     public async Task DeleteMessageRemovesOnlyThatMessageAndItsImages()
     {
         var conv = await _store.CreateAsync("t", Guid.NewGuid(), "m", null, CancellationToken.None);
