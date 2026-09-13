@@ -49,6 +49,11 @@ public static class ChatExporter
                 sb.Append('*').Append(message.Images.Count == 1 ? "1 image attached" : $"{message.Images.Count} images attached").AppendLine("*");
                 sb.AppendLine();
             }
+            foreach (var file in message.Files)
+            {
+                sb.Append("*Attached: ").Append(file.Name).Append(" (").Append(DocumentExtractor.Describe(file)).AppendLine(")*");
+                sb.AppendLine();
+            }
 
             if (!string.IsNullOrWhiteSpace(message.Reasoning))
             {

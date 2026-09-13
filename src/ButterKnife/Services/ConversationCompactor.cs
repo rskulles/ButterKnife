@@ -45,7 +45,9 @@ public sealed class ConversationCompactor
         return parts.Count == 0 ? null : string.Join("\n\n", parts);
     }
 
-    /// <summary>Builds the summarisation request. Images cannot be summarised, so they become a short note.</summary>
+    private const int FileExcerptChars = 1500;
+
+    /// <summary>Builds the summarisation request. Images cannot be summarised, so they become a short note; documents contribute their opening.</summary>
     public static IReadOnlyList<ChatMessage> BuildSummaryRequest(string? previousSummary, IReadOnlyList<ChatMessage> olderMessages)
     {
         var transcript = new StringBuilder();
@@ -65,6 +67,12 @@ public sealed class ConversationCompactor
             if (message.HasImages)
             {
                 transcript.Append($"[{message.Images.Count} image{(message.Images.Count == 1 ? "" : "s")} attached] ");
+            }
+            foreach (var file in message.Files)
+            {
+                // The start of each document is enough for a summary; the full text stays on the message itself.
+                var excerpt = file.Text.Length <= FileExcerptChars ? file.Text : file.Text[..FileExcerptChars] + "…";
+                transcript.Append($"[document \"{file.Name}\" attached; it begins: {excerpt}] ");
             }
             transcript.AppendLine(message.Content);
             transcript.AppendLine();

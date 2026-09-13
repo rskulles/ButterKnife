@@ -14,7 +14,7 @@ public static class TokenEstimator
         string.IsNullOrEmpty(text) ? 0 : (int)Math.Ceiling(text.Length / CharsPerToken);
 
     public static int Estimate(ChatMessage message) =>
-        TokensPerMessageOverhead + Estimate(message.Content) + message.Images.Count * TokensPerImage;
+        TokensPerMessageOverhead + Estimate(message.Content) + message.Images.Count * TokensPerImage + message.Files.Sum(f => Estimate(f.Text));
 
     public static int Estimate(IEnumerable<ChatMessage> messages) => messages.Sum(Estimate);
 }

@@ -53,8 +53,9 @@ page so only people who know it can open your chats from the Wi‑Fi; your own c
 - **Personas.** Ready-made setups for the model: Assistant, Programmer, Writer, Teacher, Analyst, Product Describer,
   Copywriter and more. Pick one per chat and tweak the wording if you like.
 - **Two models, one question.** Compare mode answers each prompt with two models side by side. Keep the one you like.
-- **Pictures.** Drop, paste or attach up to six images per message for models that can see. If a model can't,
-  ButterKnife says so and keeps the chat going.
+- **Pictures and files.** Drop, paste or attach up to six images per message for models that can see. If a model
+  can't, ButterKnife says so and keeps the chat going. Text files and PDFs work with every model: their text goes
+  to the model, and the chat shows a chip you can open to see what it read.
 - **Second chances.** Edit a message and resend it, regenerate a reply, continue one that got cut off, or branch a
   chat off from any point and take it somewhere else.
 - **Show your work.** Models that think out loud get a fold-out for their reasoning. Code comes highlighted with a

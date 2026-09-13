@@ -22,9 +22,14 @@ public sealed record ChatImage(string MediaType, byte[] Data)
     public string DataUrl => _dataUrl ??= $"data:{MediaType};base64,{Base64}";
 }
 
+/// <summary>A text file or PDF attached to a message: the model sees <see cref="Text"/>, the transcript shows the name.</summary>
+public sealed record ChatFile(string Name, string MediaType, int Size, string Text);
+
 public sealed record ChatMessage(ChatRole Role, string Content, IReadOnlyList<ChatImage>? Images = null)
 {
     public static readonly IReadOnlyList<ChatImage> NoImages = Array.Empty<ChatImage>();
+
+    public static readonly IReadOnlyList<ChatFile> NoFiles = Array.Empty<ChatFile>();
 
     /// <summary>Row id when the message came from the store; null for messages built for a request.</summary>
     public long? Id { get; init; }
@@ -45,6 +50,31 @@ public sealed record ChatMessage(ChatRole Role, string Content, IReadOnlyList<Ch
 
     public bool HasImages => Images.Count > 0;
 
+    /// <summary>Attached documents; their text is folded into the content on the wire by <see cref="WithFilesAsText"/>.</summary>
+    public IReadOnlyList<ChatFile> Files { get; init; } = NoFiles;
+
+    public bool HasFiles => Files.Count > 0;
+
+    /// <summary>
+    /// The message as the model receives it: each attached file as a named document block ahead of the text.
+    /// Every backend gets the same plain-text shape, so it works with any server. Images are kept.
+    /// </summary>
+    public ChatMessage WithFilesAsText()
+    {
+        if (!HasFiles)
+        {
+            return this;
+        }
+
+        var sb = new System.Text.StringBuilder();
+        foreach (var file in Files)
+        {
+            sb.Append("<document name=\"").Append(file.Name.Replace("\"", "'")).Append("\">\n").Append(file.Text).Append("\n</document>\n\n");
+        }
+        sb.Append(Content);
+        return new ChatMessage(Role, sb.ToString(), Images) { Id = Id, CreatedAt = CreatedAt, Reasoning = Reasoning, Model = Model, Stats = Stats };
+    }
+
     /// <summary>
     /// The same message with its images replaced by a note, for models that cannot see them. The stored
     /// transcript keeps the images; only the request loses them.
@@ -60,6 +90,6 @@ public sealed record ChatMessage(ChatRole Role, string Content, IReadOnlyList<Ch
             ? "[1 image was attached here but omitted: this model cannot see images.]"
             : $"[{Images.Count} images were attached here but omitted: this model cannot see images.]";
         var content = Content.Length == 0 ? note : $"{Content}\n\n{note}";
-        return new ChatMessage(Role, content);
+        return new ChatMessage(Role, content) { Files = Files };
     }
 }

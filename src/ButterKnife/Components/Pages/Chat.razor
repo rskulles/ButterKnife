@@ -263,6 +263,22 @@
                                 }
                             </div>
                         }
+                        @if (turn.Files.Count > 0)
+                        {
+                            <div class="d-flex flex-column gap-1 mb-2">
+                                @foreach (var file in turn.Files)
+                                {
+                                    <details class="msg-file small">
+                                        <summary class="d-inline-flex align-items-center gap-1 px-2 py-1 rounded border bg-body" title="@DocumentExtractor.Describe(file)">
+                                            <i class="bi @(file.MediaType == "application/pdf" ? "bi-file-earmark-pdf" : "bi-file-earmark-text")" aria-hidden="true"></i>
+                                            <span class="text-truncate" style="max-width: 18rem">@file.Name</span>
+                                            <span class="text-body-secondary">@DocumentExtractor.Describe(file)</span>
+                                        </summary>
+                                        <pre class="mt-1 mb-0 p-2 rounded bg-body text-body small text-wrap">@file.Text</pre>
+                                    </details>
+                                }
+                            </div>
+                        }
                         @turn.Text
                     </div>
                 }
@@ -366,6 +382,21 @@
                     }
                 </div>
             }
+            @if (_pendingFiles.Count > 0)
+            {
+                <div class="d-flex flex-wrap gap-2">
+                    @foreach (var file in _pendingFiles)
+                    {
+                        <span class="d-inline-flex align-items-center gap-1 px-2 py-1 rounded border small" title="@DocumentExtractor.Describe(file)">
+                            <i class="bi @(file.MediaType == "application/pdf" ? "bi-file-earmark-pdf" : "bi-file-earmark-text")" aria-hidden="true"></i>
+                            <span class="text-truncate" style="max-width: 14rem">@file.Name</span>
+                            <span class="text-body-secondary">@DocumentExtractor.Describe(file)</span>
+                            <button type="button" class="btn btn-link btn-sm p-0 ms-1 text-body-secondary lh-1" title="Remove file" aria-label="Remove @file.Name"
+                                    @onclick="() => _pendingFiles.Remove(file)" disabled="@_isStreaming"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                        </span>
+                    }
+                </div>
+            }
             @if (_imageError is not null)
             {
                 <div class="small text-danger">@_imageError</div>
@@ -382,14 +413,14 @@
                 <div class="small @(_dictationError ? "text-danger" : "text-body-secondary")">@_dictationStatus</div>
             }
             <textarea @ref="_inputElement" class="form-control" rows="2" style="resize: none"
-                      placeholder="@(_pendingImages.Count > 0 ? "Ask about the image… (Enter to send)" : "Message… (Enter to send, Shift+Enter for newline)")"
+                      placeholder="@(_pendingImages.Count > 0 ? "Ask about the image… (Enter to send)" : _pendingFiles.Count > 0 ? "Ask about the file… (Enter to send)" : "Message… (Enter to send, Shift+Enter for newline)")"
                       @bind="_input" @bind:event="oninput" disabled="@_isStreaming"></textarea>
         </div>
         <div class="d-flex align-items-center gap-lg-5 gap-md-5 gap-sm-2 justify-content-evenly">
-            <label class="btn btn-sm btn-outline-secondary @(_isStreaming || ModelIsTextOnly ? "disabled" : "")"
+            <label class="btn btn-sm btn-outline-secondary @(_isStreaming ? "disabled" : "")"
                    title="@AttachTitle">
-                <i class="bi @(ModelIsTextOnly ? "bi-eye-slash" : "bi-plus-lg")" aria-hidden="true"></i><span class="visually-hidden">@AttachTitle</span>
-                <InputFile OnChange="@(OnFilesSelectedAsync)" multiple accept="image/*" disabled="@(_isStreaming || ModelIsTextOnly)"
+                <i class="bi bi-plus-lg" aria-hidden="true"></i><span class="visually-hidden">@AttachTitle</span>
+                <InputFile OnChange="@(OnFilesSelectedAsync)" multiple accept="@DocumentExtractor.AcceptList" disabled="@_isStreaming"
                            class="d-none"/>
             </label>
             <div class="btn-group btn-group-sm position-relative">
@@ -659,7 +690,7 @@
     private IJSObjectReference? _js;
     private DotNetObjectReference<Chat>? _self;
 
-    private bool CanSend => !_isStreaming && (!string.IsNullOrWhiteSpace(_input) || _pendingImages.Count > 0) && Selected is not null;
+    private bool CanSend => !_isStreaming && (!string.IsNullOrWhiteSpace(_input) || _pendingImages.Count > 0 || _pendingFiles.Count > 0) && Selected is not null;
 
     private ModelDescriptor? Selected => _models.FirstOrDefault(m => m.Key == _selectedKey);
 
@@ -817,7 +848,7 @@
         _contextWindow = conversation.ContextWindow;
         foreach (var message in conversation.Messages)
         {
-            _turns.Add(new ChatTurn(message.Role, message.Content, Markdown, message.Images, message.Reasoning)
+            _turns.Add(new ChatTurn(message.Role, message.Content, Markdown, message.Images, message.Reasoning, message.Files)
             {
                 MessageId = message.Id,
                 CreatedAt = message.CreatedAt,
@@ -999,19 +1030,22 @@
 
         var prompt = _input.Trim();
         var images = _pendingImages.ToArray();
+        var files = _pendingFiles.ToArray();
         _input = "";
         _pendingImages.Clear();
+        _pendingFiles.Clear();
         _imageError = null;
 
-        if (!await SendMessageAsync(model, prompt, images))
+        if (!await SendMessageAsync(model, prompt, images, files))
         {
             _input = prompt; // could not save: give the draft back
             _pendingImages.AddRange(images);
+            _pendingFiles.AddRange(files);
         }
     }
 
     /// <summary>Stores a user message, adds it to the transcript, and streams the reply. False if the message could not be saved.</summary>
-    private async Task<bool> SendMessageAsync(ModelDescriptor model, string prompt, ChatImage[] images)
+    private async Task<bool> SendMessageAsync(ModelDescriptor model, string prompt, ChatImage[] images, ChatFile[] files)
     {
         _error = null;
         _contextTokens = null; // exact again once the backend reports usage for this request
@@ -1020,8 +1054,9 @@
         long messageId;
         try
         {
-            conversationId = await EnsureConversationAsync(model, prompt.Length > 0 ? prompt : $"Image ({images.Length})");
-            messageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.User, prompt, images), _disposed.Token);
+            var placeholder = prompt.Length > 0 ? prompt : files.Length > 0 ? files[0].Name : $"Image ({images.Length})";
+            conversationId = await EnsureConversationAsync(model, placeholder);
+            messageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.User, prompt, images) { Files = files }, _disposed.Token);
         }
         catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
         {
@@ -1033,7 +1068,7 @@
             return false;
         }
 
-        _turns.Add(new ChatTurn(ChatRole.User, prompt, Markdown, images) { MessageId = messageId, CreatedAt = DateTimeOffset.Now });
+        _turns.Add(new ChatTurn(ChatRole.User, prompt, Markdown, images, files: files) { MessageId = messageId, CreatedAt = DateTimeOffset.Now });
         await StreamReplyAsync(conversationId, model, BuildHistory());
         return true;
     }
@@ -1341,13 +1376,14 @@
 
         var text = _editText.Trim();
         var images = turn.Images.ToArray();
+        var files = turn.Files.ToArray();
         CancelEdit();
 
         if (!await TruncateFromAsync(conversationId, turn, messageId))
         {
             return;
         }
-        await SendMessageAsync(model, text, images);
+        await SendMessageAsync(model, text, images, files);
     }
 
     /// <summary>Drops the last reply and asks the model again with the same history.</summary>
@@ -1848,6 +1884,11 @@
     private readonly HashSet<ChatImage> _expandedImages = [];
     private string? _imageError;
 
+    /// <summary>Text files and PDFs waiting to go with the next message; their text rides in the prompt (ChatMessage.WithFilesAsText).</summary>
+    private const int MaxFiles = 6;
+    private const long MaxFileBytes = 25 * 1024 * 1024;
+    private readonly List<ChatFile> _pendingFiles = [];
+
     /// <summary>Whether the selected model accepts images: false disables attaching and strips images from requests; null (unknown) behaves as before.</summary>
     private bool? _supportsImages;
     private readonly Dictionary<string, bool?> _visionCache = new(StringComparer.Ordinal);
@@ -1857,8 +1898,8 @@
     private int ImagesInContext => _turns.Skip(_summaryThrough).Sum(t => t.Images.Count);
 
     private string AttachTitle => ModelIsTextOnly
-        ? $"{Selected?.Model} does not accept images"
-        : "Attach images (JPEG, PNG, GIF, WebP)";
+        ? $"Attach text files or PDFs ({Selected?.Model} does not accept images)"
+        : "Attach images (JPEG, PNG, GIF, WebP), text files or PDFs";
 
     /// <summary>Probes the backend once per model; the result drives the attach button and request composition.</summary>
     private async Task RefreshSupportsImagesAsync()
@@ -1899,18 +1940,24 @@
     {
         _imageError = null;
 
-        foreach (var file in e.GetMultipleFiles(MaxImages))
+        foreach (var file in e.GetMultipleFiles(MaxImages + MaxFiles))
         {
+            if (!file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                await AttachDocumentAsync(file.Name, file.ContentType, size => ValueTask.FromResult(file.OpenReadStream(size, _disposed.Token)));
+                continue;
+            }
+
+            if (ModelIsTextOnly)
+            {
+                _imageError = $"{Selected?.Model} cannot see images.";
+                continue;
+            }
+
             if (_pendingImages.Count >= MaxImages)
             {
                 _imageError = $"At most {MaxImages} images per message.";
                 break;
-            }
-
-            if (!file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-            {
-                _imageError = $"{file.Name} is not an image.";
-                continue;
             }
 
             try
@@ -1960,6 +2007,11 @@
             {
                 return;
             }
+            if (byteLength > 0 && !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                await AttachDocumentAsync(name, mediaType, size => reference.OpenReadStreamAsync(size, _disposed.Token));
+                return;
+            }
             if (ModelIsTextOnly)
             {
                 _imageError = $"{Selected?.Model} cannot see images.";
@@ -1970,9 +2022,9 @@
                 _imageError = $"At most {MaxImages} images per message.";
                 return;
             }
-            if (byteLength == 0 || !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            if (byteLength == 0)
             {
-                _imageError = $"{name} is not an image.";
+                _imageError = $"{name} could not be read.";
                 return;
             }
 
@@ -1992,6 +2044,36 @@
         {
             await reference.DisposeAsync();
             await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>Reads a text file or PDF (from the picker or the paste/drop queue) and turns it into a pending attachment.</summary>
+    private async Task AttachDocumentAsync(string name, string? mediaType, Func<long, ValueTask<Stream>> open)
+    {
+        if (_pendingFiles.Count >= MaxFiles)
+        {
+            _imageError = $"At most {MaxFiles} files per message.";
+            return;
+        }
+        if (!DocumentExtractor.IsSupported(name, mediaType))
+        {
+            _imageError = $"{name}: only images, text files and PDFs can be attached.";
+            return;
+        }
+
+        try
+        {
+            await using var stream = await open(MaxFileBytes);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, _disposed.Token);
+            _pendingFiles.Add(DocumentExtractor.Extract(name, mediaType, buffer.ToArray()));
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _imageError = ex.Message.Contains(name, StringComparison.Ordinal) ? ex.Message : $"{name}: {ex.Message}";
         }
     }
 
@@ -2036,14 +2118,14 @@
     /// <summary>A transcript turn as sent on the wire. A model known not to see images gets a note in place of each attachment.</summary>
     private ChatMessage ToRequestMessage(ChatTurn turn)
     {
-        var message = new ChatMessage(turn.Role, turn.Text, turn.Images);
+        var message = new ChatMessage(turn.Role, turn.Text, turn.Images) { Files = turn.Files }.WithFilesAsText();
         return ModelIsTextOnly ? message.WithImagesAsText() : message;
     }
 
     /// <summary>Tokens the next request would carry: exact (from the last reply) plus whatever is being typed, else an estimate.</summary>
     private (int Tokens, bool Exact) CurrentContext()
     {
-        var pending = TokenEstimator.Estimate(_input) + _pendingImages.Count * TokenEstimator.TokensPerImage;
+        var pending = TokenEstimator.Estimate(_input) + _pendingImages.Count * TokenEstimator.TokensPerImage + _pendingFiles.Sum(f => TokenEstimator.Estimate(f.Text));
         if (_contextTokens is { } exact)
         {
             return (exact + pending, pending == 0);
@@ -2362,8 +2444,11 @@
     // ---------------------------------------------------------------- transcript entry
     /// <summary>Mutable UI-side message so streamed tokens can be appended in place.</summary>
     /// <remarks>Rendered HTML is cached until the text changes, so throttled re-renders during streaming do not reparse older messages.</remarks>
-    private sealed class ChatTurn(ChatRole role, string text, MarkdownRenderer markdown, IReadOnlyList<ChatImage>? images = null, string? reasoning = null)
+    private sealed class ChatTurn(ChatRole role, string text, MarkdownRenderer markdown, IReadOnlyList<ChatImage>? images = null, string? reasoning = null, IReadOnlyList<ChatFile>? files = null)
     {
+        /// <summary>Documents attached to a user message; the model sees their text, the bubble shows chips.</summary>
+        public IReadOnlyList<ChatFile> Files { get; } = files ?? ChatMessage.NoFiles;
+
         private readonly StringBuilder _text = new(text);
         private readonly StringBuilder _reasoning = new(reasoning ?? "");
         private long? _thinkingStartedAt;

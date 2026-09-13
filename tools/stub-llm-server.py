@@ -93,6 +93,9 @@ class H(BaseHTTPRequestHandler):
                 return sum(1 for part in c if part.get("type") in ("image_url", "image"))
             return len(m.get("images") or [])
         tuning = {k: body[k] for k in ("options", "think", "temperature", "max_tokens", "chat_template_kwargs", "thinking") if k in body}
+        user = next((m.get("content") for m in reversed(body.get("messages", [])) if m.get("role") == "user"), None)
+        if isinstance(user, str) and "<document" in user:
+            print("  user carries %d document(s), %d chars" % (user.count("<document"), len(user)), flush=True)
         system = next((m.get("content") for m in body.get("messages", []) if m.get("role") == "system"), None)
         if isinstance(system, str) and system:
             print("  system:", repr(system[-160:]), flush=True)

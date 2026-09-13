@@ -50,10 +50,11 @@ export function unwireShortcuts() {
     }
 }
 
-// ---- Images from the clipboard or drag-and-drop -------------------------------------------------
-// Pasting into the composer or dropping onto the chat hands image files here. Large or unusual formats are
-// re-encoded as a bounded JPEG (same rule as the file picker), the bytes wait in a queue, .NET is told, and it
-// pulls them with takeDroppedImage() as a stream (the SignalR message limit is far below an image).
+// ---- Files from the clipboard or drag-and-drop --------------------------------------------------
+// Pasting into the composer or dropping onto the chat hands files here. Images in large or unusual formats are
+// re-encoded as a bounded JPEG (same rule as the file picker); text files and PDFs are passed through. The bytes
+// wait in a queue, .NET is told, and it pulls them with takeDroppedImage() as a stream (the SignalR message limit
+// is far below an image).
 const droppedImages = [];
 const RESIZE_ABOVE_BYTES = 1_500_000;
 const MAX_DIMENSION = 1568;
@@ -67,7 +68,7 @@ export function wireImageInput(dropZone, textarea, component) {
 
     textarea?.addEventListener("paste", (e) => {
         const files = [...(e.clipboardData?.items ?? [])]
-            .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+            .filter((item) => item.kind === "file")
             .map((item) => item.getAsFile())
             .filter(Boolean);
         if (files.length) {
@@ -87,7 +88,7 @@ export function wireImageInput(dropZone, textarea, component) {
         e.preventDefault();
         depth = 0;
         dropZone.classList.remove("drop-target");
-        ingestImages([...e.dataTransfer.files].filter((f) => f.type.startsWith("image/")), component);
+        ingestImages([...e.dataTransfer.files], component);
     });
 }
 
@@ -95,11 +96,14 @@ function hasFiles(e) {
     return [...(e.dataTransfer?.types ?? [])].includes("Files");
 }
 
+// Images are bounded here; any other file (text, PDF) is queued as-is and .NET decides whether it can use it.
 async function ingestImages(files, component) {
     for (const file of files) {
         let bytes, type = file.type;
         try {
-            if (file.size > RESIZE_ABOVE_BYTES || !SUPPORTED.has(type)) {
+            if (!type.startsWith("image/")) {
+                bytes = new Uint8Array(await file.arrayBuffer());
+            } else if (file.size > RESIZE_ABOVE_BYTES || !SUPPORTED.has(type)) {
                 ({ bytes, type } = await toBoundedJpeg(file));
             } else {
                 bytes = new Uint8Array(await file.arrayBuffer());

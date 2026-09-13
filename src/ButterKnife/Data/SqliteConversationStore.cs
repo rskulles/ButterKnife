@@ -156,6 +156,19 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
             await insertImage.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        foreach (var file in message.Files)
+        {
+            await using var insertFile = connection.CreateCommand();
+            insertFile.Transaction = (SqliteTransaction)tx;
+            insertFile.CommandText = "INSERT INTO message_files (message_id, name, media_type, size, text) VALUES ($mid, $name, $type, $size, $text);";
+            insertFile.Parameters.AddWithValue("$mid", messageId);
+            insertFile.Parameters.AddWithValue("$name", file.Name);
+            insertFile.Parameters.AddWithValue("$type", file.MediaType);
+            insertFile.Parameters.AddWithValue("$size", file.Size);
+            insertFile.Parameters.AddWithValue("$text", file.Text);
+            await insertFile.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await tx.CommitAsync(cancellationToken);
         return messageId;
     }
@@ -393,6 +406,29 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
             }
         }
 
+        var files = new Dictionary<long, List<ChatFile>>();
+        await using (var fileCmd = connection.CreateCommand())
+        {
+            fileCmd.CommandText = """
+                SELECT f.message_id, f.name, f.media_type, f.size, f.text
+                FROM message_files f
+                JOIN messages m ON m.id = f.message_id
+                WHERE m.conversation_id = $cid
+                ORDER BY f.id;
+                """;
+            fileCmd.Parameters.AddWithValue("$cid", id.ToString("D"));
+            await using var fileReader = await fileCmd.ExecuteReaderAsync(cancellationToken);
+            while (await fileReader.ReadAsync(cancellationToken))
+            {
+                var messageId = fileReader.GetInt64(0);
+                if (!files.TryGetValue(messageId, out var list))
+                {
+                    files[messageId] = list = [];
+                }
+                list.Add(new ChatFile(fileReader.GetString(1), fileReader.GetString(2), (int)fileReader.GetInt64(3), fileReader.GetString(4)));
+            }
+        }
+
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT id, role, content, created_at, reasoning, model, stats FROM messages WHERE conversation_id = $cid ORDER BY id;";
         cmd.Parameters.AddWithValue("$cid", id.ToString("D"));
@@ -412,6 +448,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
                 Reasoning = reader.IsDBNull(4) ? null : reader.GetString(4),
                 Model = reader.IsDBNull(5) ? null : reader.GetString(5),
                 Stats = reader.IsDBNull(6) ? null : DeserializeStats(reader.GetString(6)),
+                Files = files.TryGetValue(messageId, out var attached) ? attached : ChatMessage.NoFiles,
             });
         }
         return messages;

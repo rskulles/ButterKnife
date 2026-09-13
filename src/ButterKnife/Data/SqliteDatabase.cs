@@ -203,6 +203,17 @@ public sealed class SqliteDatabase
 
                 CREATE INDEX IF NOT EXISTS ix_message_images_message ON message_images(message_id);
 
+                CREATE TABLE IF NOT EXISTS message_files (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                    name       TEXT NOT NULL,
+                    media_type TEXT NOT NULL,
+                    size       INTEGER NOT NULL,
+                    text       TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_message_files_message ON message_files(message_id);
+
                 CREATE TABLE IF NOT EXISTS settings (
                     key        TEXT PRIMARY KEY,
                     value      TEXT NOT NULL,

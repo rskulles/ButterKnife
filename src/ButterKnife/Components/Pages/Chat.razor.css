@@ -201,3 +201,19 @@
     color: inherit;
     padding: 0;
 }
+
+/* Attached documents in a user bubble: a chip that unfolds the extracted text, capped like the reasoning box. */
+.msg-file summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.msg-file summary::-webkit-details-marker {
+    display: none;
+}
+
+.msg-file pre {
+    max-height: 18rem;
+    overflow: auto;
+    white-space: pre-wrap;
+}
