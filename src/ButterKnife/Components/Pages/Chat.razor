@@ -91,8 +91,13 @@
             }
 
             <div class="msg mb-3 msg-@turn.Role.ToString().ToLowerInvariant() @(turn.Role == ChatRole.User ? "ms-auto" : "")">
-                <div
-                    class="small text-uppercase text-body-secondary @(turn.Role == ChatRole.User ? "text-end" : "")">@(turn.Role == ChatRole.User ? _displayName : "Assistant")</div>
+                <div class="small text-body-secondary @(turn.Role == ChatRole.User ? "text-end" : "")">
+                    <span class="text-uppercase">@(turn.Role == ChatRole.User ? _displayName : "Assistant")</span>
+                    @if (turn.CreatedAt is { } at)
+                    {
+                        <time class="msg-time ms-2" datetime="@at.ToString("O")" title="@at.LocalDateTime.ToString("f")">@FormatWhen(at)</time>
+                    }
+                </div>
                 @if (turn.Role == ChatRole.Assistant)
                 {
                     @if (turn.Reasoning.Length > 0)
@@ -1155,6 +1160,13 @@
         {
             _error = $"Reply was not saved: {ex.Message}";
         }
+    }
+
+    /// <summary>"14:32" for today, "Sep 12, 14:32" otherwise (server-local time; the full date is in the tooltip).</summary>
+    private static string FormatWhen(DateTimeOffset at)
+    {
+        var local = at.LocalDateTime;
+        return local.Date == DateTime.Today ? local.ToString("HH:mm") : local.ToString("MMM d, HH:mm");
     }
 
     private static string MakeTitle(string prompt)

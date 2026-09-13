@@ -68,6 +68,12 @@
     clip-path: polygon(0 0, 100% 0, 100% 100%);
 }
 
+/* Timestamp beside the speaker label: present but unobtrusive. */
+.msg-time {
+    font-size: 0.8em;
+    opacity: 0.75;
+}
+
 /* Per-message actions: quiet until the entry is hovered or focused; always visible where there is no hover (touch). */
 .msg-actions {
     opacity: 0;
