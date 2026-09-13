@@ -251,6 +251,18 @@ export async function copyText(text) {
     }
 }
 
+// Hands the browser a file to save (Export as Markdown). The object URL is released once the download has started.
+export function downloadText(fileName, text, mimeType = "text/markdown") {
+    const url = URL.createObjectURL(new Blob([text], { type: `${mimeType};charset=utf-8` }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
 // ---- Auto-scroll that yields to the reader ---------------------------------------------------------
 // While a reply streams the transcript follows the newest text, unless the user has scrolled up to read; then it
 // stays put and a "Jump to latest" pill appears. Scrolling back near the bottom (or clicking the pill) re-pins.

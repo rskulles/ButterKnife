@@ -51,6 +51,13 @@
                 <i class="bi bi-layout-split" aria-hidden="true"></i>Compare
             </button>
         }
+        @if (_conversationId is not null && _turns.Count > 0)
+        {
+            <button type="button" class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center gap-1" @onclick="ExportAsync"
+                    title="Save this chat as a Markdown file" disabled="@_isStreaming">
+                <i class="bi bi-download" aria-hidden="true"></i><span class="d-none d-md-inline">Export</span>
+            </button>
+        }
         <label class="visually-hidden" for="persona-select">Persona</label>
         <select id="persona-select" class="form-select form-select-sm w-auto ms-auto"
                 value="@_personaKey" @onchange="OnPersonaChangedAsync" disabled="@_isStreaming"
@@ -1297,6 +1304,36 @@
     }
 
     /// <summary>Copies the reply's source Markdown (not the rendered HTML), so it pastes cleanly into notes and editors.</summary>
+    /// <summary>Downloads the stored conversation as one Markdown file (see ChatExporter).</summary>
+    private async Task ExportAsync()
+    {
+        if (_conversationId is not { } id || _js is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var conversation = await Store.GetAsync(id, _disposed.Token);
+            if (conversation is null)
+            {
+                return;
+            }
+            var markdown = ChatExporter.ToMarkdown(conversation, _displayName, SelectedPersona?.Name, DateTimeOffset.Now);
+            await _js.InvokeVoidAsync("downloadText", _disposed.Token, ChatExporter.FileName(conversation.Title), markdown);
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not export the chat: {ex.Message}";
+        }
+    }
+
     private async Task CopyReplyAsync(ChatTurn turn)
     {
         if (_js is null)
