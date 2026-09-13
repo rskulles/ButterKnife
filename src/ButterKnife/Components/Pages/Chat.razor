@@ -19,6 +19,7 @@
 @inject ConversationCompactor Compactor
 @inject ChatTitler Titler
 @inject TranscriptionService Transcription
+@inject ImageGenerationService ImageGen
 @inject ISettingsStore Settings
 @inject SettingsEvents SettingsEvents
 @inject PersonaEvents PersonaEvents
@@ -210,8 +211,25 @@
                             <div class="prewrap text-body-secondary mt-1 px-2">@turn.Reasoning</div>
                         </details>
                     }
+                    @if (turn.Images.Count > 0)
+                    {
+                        @* A picture the image connection made (/image): shown full width, with a way to hand it to a vision model. *@
+                        <div class="d-flex flex-column gap-2 mb-2">
+                            @foreach (var image in turn.Images)
+                            {
+                                <div>
+                                    <img src="@image.DataUrl" alt="Generated image" class="rounded d-block mw-100 msg-image @(_expandedImages.Contains(image) ? "msg-image-expanded" : "")"
+                                         style="max-height: 24rem" title="@GeneratedImageTitle(image)" @onclick="() => ToggleImage(image)"/>
+                                    <button type="button" class="btn btn-link btn-sm p-0 mt-1 text-body-secondary" @onclick="() => AskAboutImage(image)"
+                                            disabled="@(_isStreaming || ModelIsTextOnly)" title="@(ModelIsTextOnly ? $"{Selected?.Model} cannot see images" : "Attach this picture to your next message")">
+                                        <i class="bi bi-chat-square-dots me-1" aria-hidden="true"></i>Ask about this image
+                                    </button>
+                                </div>
+                            }
+                        </div>
+                    }
                     <div data-message-id="@turn.MessageId"
-                        class="msg-bubble msg-markdown px-3 py-2 rounded-3 bg-body-tertiary text-break">@turn.Html@(turn.IsStreaming ? "▍" : "")</div>
+                        class="msg-bubble msg-markdown px-3 py-2 rounded-3 bg-body-tertiary text-break @(turn.Text.Length == 0 && turn.Images.Count > 0 && !turn.IsStreaming ? "d-none" : "")">@turn.Html@(turn.IsStreaming ? "▍" : "")</div>
                     @if (turn.IsStreaming)
                     {
                         <ButterKnifeThrobber Stats="turn.GetStats"/>
@@ -413,10 +431,17 @@
                 <div class="small @(_dictationError ? "text-danger" : "text-body-secondary")">@_dictationStatus</div>
             }
             <textarea @ref="_inputElement" class="form-control" rows="2" style="resize: none"
-                      placeholder="@(_pendingImages.Count > 0 ? "Ask about the image… (Enter to send)" : _pendingFiles.Count > 0 ? "Ask about the file… (Enter to send)" : "Message… (Enter to send, Shift+Enter for newline)")"
+                      placeholder="@(_pendingImages.Count > 0 ? "Ask about the image… (Enter to send)" : _pendingFiles.Count > 0 ? "Ask about the file… (Enter to send)" : _imageConnection is not null ? "Message… (Enter to send; /image to make a picture)" : "Message… (Enter to send, Shift+Enter for newline)")"
                       @bind="_input" @bind:event="oninput" disabled="@_isStreaming"></textarea>
         </div>
         <div class="d-flex align-items-center gap-lg-5 gap-md-5 gap-sm-2 justify-content-evenly">
+            @if (_imageConnection is not null)
+            {
+                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="StartImageCommandAsync" disabled="@_isStreaming"
+                        title="Make a picture with @_imageConnection.Name: type /image and describe it">
+                    <i class="bi bi-brush" aria-hidden="true"></i><span class="visually-hidden">Make a picture</span>
+                </button>
+            }
             <label class="btn btn-sm btn-outline-secondary @(_isStreaming ? "disabled" : "")"
                    title="@AttachTitle">
                 <i class="bi bi-plus-lg" aria-hidden="true"></i><span class="visually-hidden">@AttachTitle</span>
@@ -695,7 +720,8 @@
     private IJSObjectReference? _js;
     private DotNetObjectReference<Chat>? _self;
 
-    private bool CanSend => !_isStreaming && (!string.IsNullOrWhiteSpace(_input) || _pendingImages.Count > 0 || _pendingFiles.Count > 0) && Selected is not null;
+    private bool CanSend => !_isStreaming && (!string.IsNullOrWhiteSpace(_input) || _pendingImages.Count > 0 || _pendingFiles.Count > 0)
+        && (Selected is not null || (_imageConnection is not null && ImageCommand.TryParse(_input, out _)));
 
     private ModelDescriptor? Selected => _models.FirstOrDefault(m => m.Key == _selectedKey);
 
@@ -723,7 +749,7 @@
 
         // Local data first so the page renders at once; the model list can take a while when a connection is down,
         // so it loads in the background and ReconcileSelection applies the saved model when it arrives.
-        await Task.WhenAll(LoadPersonasAsync(), LoadDisplayNameAsync());
+        await Task.WhenAll(LoadPersonasAsync(), LoadDisplayNameAsync(), LoadImageConnectionAsync());
         _ = RefreshModelsInBackgroundAsync();
 
         // First visit to "/": OnParametersSetAsync returns early (null id == null current id), so apply the default persona here.
@@ -979,6 +1005,7 @@
     private void OnConnectionsChanged() =>
         _ = InvokeAsync(async () =>
         {
+            await LoadImageConnectionAsync();
             await RefreshModelsAsync();
             _ = RefreshContextWindowAsync(); // the selection may have moved to another model
             StateHasChanged();
@@ -1039,7 +1066,29 @@
 
     private async Task SendAsync()
     {
-        if (!CanSend || Selected is not { } model)
+        if (!CanSend)
+        {
+            return;
+        }
+
+        if (_imageConnection is { } imageConnection && ImageCommand.TryParse(_input, out var imagePrompt))
+        {
+            if (imagePrompt.Length == 0)
+            {
+                _imageError = "Describe the picture after /image.";
+                return;
+            }
+            var draft = _input;
+            _input = "";
+            _imageError = null;
+            if (!await GenerateImageAsync(imageConnection, imagePrompt))
+            {
+                _input = draft;
+            }
+            return;
+        }
+
+        if (Selected is not { } model)
         {
             return;
         }
@@ -1917,7 +1966,7 @@
 
     private bool ModelIsTextOnly => _supportsImages == false;
 
-    private int ImagesInContext => _turns.Skip(_summaryThrough).Sum(t => t.Images.Count);
+    private int ImagesInContext => _turns.Skip(_summaryThrough).Where(t => t.Role == ChatRole.User).Sum(t => t.Images.Count); // generated pictures are never sent
 
     private string AttachTitle => ModelIsTextOnly
         ? $"Attach text files or PDFs ({Selected?.Model} does not accept images)"
@@ -2099,6 +2148,145 @@
         }
     }
 
+    // ---------------------------------------------------------------- image generation (/image)
+    /// <summary>The first image generation connection, if any; drives the paint button and the /image command.</summary>
+    private LlmConnection? _imageConnection;
+
+    private readonly Dictionary<ChatImage, int> _imageSeeds = [];
+
+    private string GeneratedImageTitle(ChatImage image) => _imageSeeds.TryGetValue(image, out var seed) ? $"Seed {seed} · click to toggle size" : "Click to toggle size";
+
+    private async Task LoadImageConnectionAsync()
+    {
+        try
+        {
+            _imageConnection = await ImageGen.GetConnectionAsync(_disposed.Token);
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            _imageConnection = null;
+        }
+    }
+
+    private async Task StartImageCommandAsync()
+    {
+        if (!ImageCommand.TryParse(_input, out _))
+        {
+            _input = "/image " + _input.TrimStart();
+        }
+        if (_js is not null)
+        {
+            await _js.InvokeVoidAsync("focus", _inputElement);
+        }
+    }
+
+    /// <summary>
+    /// "/image prompt": stores the prompt as the user's message, then an assistant message carrying the picture the
+    /// image connection rendered. Runs through the same streaming state as a text reply so Stop and the throbber
+    /// work; the chat model is not involved (later turns see a short note in place of the pixels).
+    /// </summary>
+    private async Task<bool> GenerateImageAsync(LlmConnection connection, string prompt)
+    {
+        _error = null;
+        Guid conversationId;
+        long userMessageId;
+        try
+        {
+            // An existing chat keeps its model untouched. A chat started by /image is created with the selected or
+            // default chat model, or with the image connection itself when no chat model is known yet.
+            conversationId = _conversationId
+                ?? await EnsureConversationAsync(Selected ?? PickDefault() ?? new ModelDescriptor(connection.Id, connection.Name, connection.DefaultModel ?? "image", false), $"Image: {prompt}");
+            userMessageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.User, $"/image {prompt}"), _disposed.Token);
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not save the message: {ex.Message}";
+            return false;
+        }
+        _turns.Add(new ChatTurn(ChatRole.User, $"/image {prompt}", Markdown) { MessageId = userMessageId, CreatedAt = DateTimeOffset.Now });
+
+        var reply = new ChatTurn(ChatRole.Assistant, "", Markdown) { ModelName = connection.Name, IsStreaming = true };
+        _turns.Add(reply);
+        _isStreaming = true;
+        _generation = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
+        var token = _generation.Token;
+        await RenderAndScrollAsync(force: true);
+
+        ChatImage? picture = null;
+        try
+        {
+            var result = await ImageGen.GenerateAsync(connection, new ImageRequest(prompt), token);
+            picture = new ChatImage("image/png", result.Png);
+            reply.ModelName = string.IsNullOrEmpty(result.Model) ? connection.Name : $"{result.Model} ({connection.Name})";
+            if (result.Seed is { } seed)
+            {
+                _imageSeeds[picture] = seed; // shown in the picture's tooltip this session; not stored
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            reply.Stopped = true;
+        }
+        catch (Exception ex)
+        {
+            _error = $"{connection.Name}: {ex.Message}";
+        }
+        finally
+        {
+            reply.IsStreaming = false;
+            _isStreaming = false;
+            _generation?.Dispose();
+            _generation = null;
+        }
+
+        if (picture is null)
+        {
+            _turns.Remove(reply);
+            await RenderAndScrollAsync();
+            return true; // the prompt was saved; the user can retry with a new /image
+        }
+
+        var stored = new ChatTurn(ChatRole.Assistant, reply.Text, Markdown, [picture]) { ModelName = reply.ModelName, StoredStats = reply.GetStats(), CreatedAt = DateTimeOffset.Now };
+        _turns[_turns.IndexOf(reply)] = stored;
+        try
+        {
+            stored.MessageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.Assistant, stored.Text, [picture]) { Model = stored.ModelName, Stats = stored.StoredStats }, CancellationToken.None);
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Picture was not saved: {ex.Message}";
+        }
+        _codeBlocksDirty = true;
+        await RenderAndScrollAsync(force: true);
+        return true;
+    }
+
+    /// <summary>Puts a generated picture on the next message so a vision model can be asked about it.</summary>
+    private async Task AskAboutImage(ChatImage image)
+    {
+        if (_pendingImages.Count >= MaxImages)
+        {
+            _imageError = $"At most {MaxImages} images per message.";
+            return;
+        }
+        if (!_pendingImages.Contains(image))
+        {
+            _pendingImages.Add(image);
+        }
+        if (_js is not null)
+        {
+            await _js.InvokeVoidAsync("focus", _inputElement);
+        }
+    }
+
     private void ToggleImage(ChatImage image)
     {
         if (!_expandedImages.Remove(image))
@@ -2140,6 +2328,12 @@
     /// <summary>A transcript turn as sent on the wire. A model known not to see images gets a note in place of each attachment.</summary>
     private ChatMessage ToRequestMessage(ChatTurn turn)
     {
+        if (turn.Role == ChatRole.Assistant && turn.Images.Count > 0)
+        {
+            // A generated picture is not something the chat model said; it gets a note instead of the pixels.
+            var note = $"[{turn.Images.Count} image{(turn.Images.Count == 1 ? "" : "s")} generated here]";
+            return new ChatMessage(ChatRole.Assistant, turn.Text.Length == 0 ? note : $"{turn.Text}\n\n{note}");
+        }
         var message = new ChatMessage(turn.Role, turn.Text, turn.Images) { Files = turn.Files }.WithFilesAsText();
         return ModelIsTextOnly ? message.WithImagesAsText() : message;
     }

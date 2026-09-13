@@ -27,6 +27,9 @@ public static class ConnectionPresets
         new("Anthropic", BackendKind.Anthropic, "https://api.anthropic.com", "claude-opus-5", RequiresApiKey: true,
             "Anthropic's hosted Claude models. Requires an API key from console.anthropic.com."),
 
+        new("Crayon Cloud (images)", BackendKind.ImageGeneration, "http://localhost:8765/v1", null, RequiresApiKey: false,
+            "Pictures from a prompt: type /image followed by what you want in any chat. Crayon Cloud (github.com/rskulles/CrayonCloud) or any server with the OpenAI images API, such as LocalAI. Keep the /v1 suffix."),
+
         new("Whisper (speech to text)", BackendKind.Transcription, "http://localhost:8000/v1", null, RequiresApiKey: false,
             "Dictation only. Works with OpenAI-style /v1/audio/transcriptions servers (Speaches / faster-whisper-server, LocalAI, OpenAI) and with whisper.cpp's server (/inference at the root, e.g. http://host:8080). Audio is sent as 16 kHz WAV. Default model is used only by servers that need one (e.g. whisper-1 or Systran/faster-whisper-small)."),
     ];

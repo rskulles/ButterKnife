@@ -16,7 +16,7 @@ and image counts it carried, which is how the wire format is checked during manu
 
     python3 tools/stub-llm-server.py [--port 11434] [--delay 0.08]
 """
-import argparse, json, time
+import argparse, base64, json, struct, time, zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 REPLY = """## Markdown check
@@ -49,6 +49,17 @@ graph LR
 ```
 """
 import re
+
+def fake_png(width, height, seed):
+    """A gradient PNG written by hand (no Pillow needed): the hue comes from the seed so different seeds look different."""
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+    r0, g0, b0 = (seed * 37) % 256, (seed * 91) % 256, (seed * 53) % 256
+    rows = b""
+    for y in range(height):
+        t = y / max(1, height - 1)
+        rows += b"\x00" + bytes(v for x in range(width) for v in (int(r0 * (1 - t) + 255 * t * x / width), int(g0 * (1 - t) + 80 * t), int(b0 * (1 - t) + 255 * t)))
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
 DELAY = 0.08
 WORDS = re.findall(r"\S+\s*|\s+", REPLY)
 CONTINUATION = re.findall(r"\S+\s*|\s+", "and here is the rest of the reply, continued from where it stopped.")
@@ -82,6 +93,15 @@ class H(BaseHTTPRequestHandler):
             print("POST /v1/audio/transcriptions bytes=%d has_file=%s has_model=%s" % (n, b'name="file"' in raw, b'name="model"' in raw), flush=True)
             b = b"File Not Found (/v1/audio/transcriptions)"
             self.send_response(404); self.send_header("Content-Type", "text/plain"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
+        if self.path == "/v1/images/generations":
+            # Crayon Cloud / OpenAI images API: a small gradient PNG, after a pause that scales with --delay.
+            body = json.loads(raw or b"{}")
+            print("POST /v1/images/generations", repr(body.get("prompt", ""))[:60], body.get("size"), "steps=%s seed=%s" % (body.get("steps"), body.get("seed")), flush=True)
+            time.sleep(DELAY * 20)
+            seed = body.get("seed") if body.get("seed") is not None else 4242
+            self._json({"created": int(time.time()), "data": [{"b64_json": base64.b64encode(fake_png(256, 256, seed)).decode(), "seed": seed}],
+                        "crayoncloud": {"model": "z-image-turbo", "engine": "stub", "width": 256, "height": 256, "steps": body.get("steps") or 8, "seconds": round(DELAY * 20, 1)}})
+            return
         if self.path == "/inference":
             wav = raw.find(b"RIFF") >= 0 and raw.find(b"WAVE") >= 0
             print("POST /inference bytes=%d has_file=%s wav=%s" % (n, b'name="file"' in raw, wav), flush=True)

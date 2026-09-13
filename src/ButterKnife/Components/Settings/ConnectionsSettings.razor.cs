@@ -14,6 +14,7 @@ public partial class ConnectionsSettings : IDisposable
     [Inject] private IHttpClientFactory HttpClientFactory { get; set; } = default!;
     [Inject] private TranscriptionClient Transcription { get; set; } = default!;
     [Inject] private LanScanner Scanner { get; set; } = default!;
+    [Inject] private ImageGenerationClient ImageGen { get; set; } = default!;
 
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(20);
 
@@ -299,6 +300,12 @@ public partial class ConnectionsSettings : IDisposable
                     return (true, "Reachable. It did not list models (whisper.cpp does not), so try the microphone to confirm transcription works.");
                 }
             }
+            else if (c.Kind == BackendKind.ImageGeneration)
+            {
+                models = await ImageGen.ProbeAsync(c, cts.Token);
+                _fetchedModels = models.ToList();
+                return (true, models.Count == 0 ? "Reachable. Type /image and a prompt in a chat to make a picture." : $"Reachable, serving {string.Join(", ", models)}. Type /image and a prompt in a chat to make a picture.");
+            }
             else
             {
                 var client = LlmClientFactory.Create(c, HttpClientFactory);
@@ -331,6 +338,7 @@ public partial class ConnectionsSettings : IDisposable
         BackendKind.OpenAiCompatible => "OpenAI-compatible",
         BackendKind.Anthropic => "Anthropic",
         BackendKind.Transcription => "Speech to text",
+        BackendKind.ImageGeneration => "Image generation",
         _ => kind.ToString(),
     };
 
@@ -339,6 +347,7 @@ public partial class ConnectionsSettings : IDisposable
         BackendKind.Ollama => "Server root, e.g. http://ollama.local:11434 (no /api suffix).",
         BackendKind.OpenAiCompatible => "Include the version prefix, e.g. http://lmstudio.local:1234/v1.",
         BackendKind.Anthropic => "Normally https://api.anthropic.com. Change only for a proxy.",
+        BackendKind.ImageGeneration => "Include /v1, e.g. http://crayon.local:8765/v1 (Crayon Cloud) or a LocalAI server. Used by the /image command in chats.",
         BackendKind.Transcription => "OpenAI-style servers: include /v1 (http://whisper.local:8000/v1). whisper.cpp server: its root (http://whisper.local:8080); either works, the dialect is detected. Used only for the microphone button.",
         _ => "",
     };

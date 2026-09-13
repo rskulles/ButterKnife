@@ -29,6 +29,9 @@ public enum BackendKind
     /// <summary>OpenAI-style API. BaseUrl includes the version prefix, e.g. http://lmstudio.local:1234/v1</summary>
     OpenAiCompatible,
 
+    /// <summary>Text-to-image through the OpenAI images API (Crayon Cloud, LocalAI). BaseUrl includes /v1. Not a chat backend.</summary>
+    ImageGeneration,
+
     /// <summary>Anthropic Messages API via the official SDK. BaseUrl is normally https://api.anthropic.com</summary>
     Anthropic,
 

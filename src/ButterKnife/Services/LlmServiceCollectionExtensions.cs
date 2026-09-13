@@ -33,6 +33,8 @@ public static class LlmServiceCollectionExtensions
         services.AddSingleton<ChatTitler>();
         services.AddSingleton<TranscriptionClient>();
         services.AddSingleton<TranscriptionService>();
+        services.AddSingleton<ImageGenerationClient>();
+        services.AddSingleton<ImageGenerationService>();
         services.AddHostedService<ConnectionSeeder>();
 
         return services;
