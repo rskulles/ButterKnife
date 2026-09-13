@@ -21,4 +21,7 @@ public static class SettingKeys
 
     /// <summary>"true" to listen on all interfaces so phones and other devices can reach the app; "false" for localhost only. Applied at startup.</summary>
     public const string ListenOnLan = "server.listen_on_lan";
+
+    /// <summary>"false" to stop Settings → General asking GitHub whether a newer release exists. Unset means on.</summary>
+    public const string CheckForUpdates = "updates.check";
 }

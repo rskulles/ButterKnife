@@ -14,6 +14,10 @@ builder.Services.AddLlmBackends(builder.Configuration);
 builder.Services.AddDataStores(builder.Configuration);
 builder.Services.AddSingleton<LanAddressService>(); // "open on your phone" QR code
 
+// Settings → General asks GitHub for the latest release (only then, and cached); a short timeout keeps the page snappy offline.
+builder.Services.AddHttpClient(UpdateChecker.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<UpdateChecker>();
+
 var app = builder.Build();
 
 // Settings → General → "Reachable on the local network": decides the host part of the listen addresses. Set here,
