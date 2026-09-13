@@ -44,6 +44,11 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
                 throw new InvalidOperationException($"{BackendName}: {chunk.Error}");
             }
 
+            if (!string.IsNullOrEmpty(chunk.Message?.Thinking))
+            {
+                yield return ChatDelta.FromReasoning(chunk.Message.Thinking);
+            }
+
             if (!string.IsNullOrEmpty(chunk.Message?.Content))
             {
                 yield return ChatDelta.FromText(chunk.Message.Content);
@@ -51,6 +56,11 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
 
             if (chunk.Done)
             {
+                if (chunk.DoneReason is { } reason)
+                {
+                    yield return ChatDelta.FromFinish(reason == "stop" ? FinishReason.Stop : reason == "length" ? FinishReason.Length : FinishReason.Other);
+                }
+
                 if (chunk.PromptEvalCount is not null || chunk.EvalCount is not null)
                 {
                     yield return ChatDelta.FromUsage(new TokenUsage(
@@ -126,12 +136,13 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
 
     private sealed record RequestOptions([property: JsonPropertyName("num_ctx")] int NumCtx);
 
-    private sealed record WireMessage(string Role, string Content, string[]? Images = null);
+    private sealed record WireMessage(string Role, string Content, string[]? Images = null, string? Thinking = null);
 
     private sealed record ChatChunk(
         WireMessage? Message,
         bool Done,
         string? Error,
+        [property: JsonPropertyName("done_reason")] string? DoneReason,
         [property: JsonPropertyName("prompt_eval_count")] int? PromptEvalCount,
         [property: JsonPropertyName("eval_count")] int? EvalCount,
         [property: JsonPropertyName("prompt_eval_duration")] long? PromptEvalDuration,

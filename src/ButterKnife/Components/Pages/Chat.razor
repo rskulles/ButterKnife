@@ -95,6 +95,16 @@
                     class="small text-uppercase text-body-secondary @(turn.Role == ChatRole.User ? "text-end" : "")">@(turn.Role == ChatRole.User ? _displayName : "Assistant")</div>
                 @if (turn.Role == ChatRole.Assistant)
                 {
+                    @if (turn.Reasoning.Length > 0)
+                    {
+                        @* Open while the model is still thinking and has not started the answer; folds once the answer streams. *@
+                        <details class="msg-thinking small mb-1" open="@(turn.IsStreaming && turn.Text.Length == 0)">
+                            <summary class="text-body-secondary">
+                                <i class="bi bi-lightbulb me-1" aria-hidden="true"></i>@(turn.IsStreaming && turn.Text.Length == 0 ? "Thinking…" : turn.ThinkingLabel)
+                            </summary>
+                            <div class="prewrap text-body-secondary mt-1 px-2">@turn.Reasoning</div>
+                        </details>
+                    }
                     <div
                         class="msg-bubble msg-markdown px-3 py-2 rounded-3 bg-body-tertiary text-break">@turn.Html@(turn.IsStreaming ? "▍" : "")</div>
                     @if (turn.IsStreaming)
@@ -503,7 +513,7 @@
         _contextWindow = conversation.ContextWindow;
         foreach (var message in conversation.Messages)
         {
-            _turns.Add(new ChatTurn(message.Role, message.Content, Markdown, message.Images) { MessageId = message.Id, CreatedAt = message.CreatedAt });
+            _turns.Add(new ChatTurn(message.Role, message.Content, Markdown, message.Images, message.Reasoning) { MessageId = message.Id, CreatedAt = message.CreatedAt });
         }
 
         // The saved model is selected even before the model list has arrived; ReconcileSelection (now, or when the
@@ -697,6 +707,7 @@
         {
             var client = await Registry.GetAsync(model.ConnectionId, token);
             var lastRender = Stopwatch.GetTimestamp();
+            var splitter = new ThinkTagSplitter(); // models that think inline as <think>…</think>
 
             await foreach (var delta in client.StreamChatAsync(model.Model, history, token))
             {
@@ -705,18 +716,46 @@
                     usage = delta.Usage;
                     reply.Usage = usage;
                 }
-
-                if (delta.Text is not { } text)
+                if (delta.Finish is { } finish)
                 {
-                    continue;
+                    reply.Finish = finish;
+                }
+                if (delta.Reasoning is { } reasoning)
+                {
+                    reply.AppendReasoning(reasoning);
                 }
 
-                reply.Append(text);
+                if (delta.Text is { } text)
+                {
+                    foreach (var piece in splitter.Feed(text))
+                    {
+                        if (piece.Reasoning is { } r)
+                        {
+                            reply.AppendReasoning(r);
+                        }
+                        if (piece.Text is { } t)
+                        {
+                            reply.Append(t);
+                        }
+                    }
+                }
 
                 if (Stopwatch.GetElapsedTime(lastRender) >= RenderInterval)
                 {
                     await RenderAndScrollAsync();
                     lastRender = Stopwatch.GetTimestamp();
+                }
+            }
+
+            if (splitter.Flush() is { } tail)
+            {
+                if (tail.Reasoning is { } r)
+                {
+                    reply.AppendReasoning(r);
+                }
+                if (tail.Text is { } t)
+                {
+                    reply.Append(t);
                 }
             }
 
@@ -900,7 +939,8 @@
 
         try
         {
-            reply.MessageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.Assistant, text), CancellationToken.None);
+            reply.MessageId = await Store.AppendMessageAsync(conversationId,
+                new ChatMessage(ChatRole.Assistant, text) { Reasoning = reply.Reasoning.Length > 0 ? reply.Reasoning : null }, CancellationToken.None);
             reply.CreatedAt = DateTimeOffset.Now;
             Events.NotifyChanged();
         }
@@ -1433,9 +1473,12 @@
     // ---------------------------------------------------------------- transcript entry
     /// <summary>Mutable UI-side message so streamed tokens can be appended in place.</summary>
     /// <remarks>Rendered HTML is cached until the text changes, so throttled re-renders during streaming do not reparse older messages.</remarks>
-    private sealed class ChatTurn(ChatRole role, string text, MarkdownRenderer markdown, IReadOnlyList<ChatImage>? images = null)
+    private sealed class ChatTurn(ChatRole role, string text, MarkdownRenderer markdown, IReadOnlyList<ChatImage>? images = null, string? reasoning = null)
     {
         private readonly StringBuilder _text = new(text);
+        private readonly StringBuilder _reasoning = new(reasoning ?? "");
+        private long? _thinkingStartedAt;
+        private long? _thinkingEndedAt;
         private MarkupString? _html;
         private bool _isStreaming;
         private long _startedAt;
@@ -1449,6 +1492,24 @@
         public long? MessageId { get; set; }
 
         public DateTimeOffset? CreatedAt { get; set; }
+
+        /// <summary>The model's visible thinking, shown in a collapsible block above the reply; never sent back to the model.</summary>
+        public string Reasoning => _reasoning.ToString();
+
+        /// <summary>Why the backend stopped, when it said; Length means the reply was cut off and can be continued.</summary>
+        public FinishReason? Finish { get; set; }
+
+        public void AppendReasoning(string chunk)
+        {
+            _thinkingStartedAt ??= Stopwatch.GetTimestamp();
+            _thinkingEndedAt = Stopwatch.GetTimestamp();
+            _reasoning.Append(chunk);
+        }
+
+        /// <summary>"Thought for 12s" when the thinking was timed in this session, else just "Thinking".</summary>
+        public string ThinkingLabel => _thinkingStartedAt is { } started && _thinkingEndedAt is { } ended
+            ? $"Thought for {Stopwatch.GetElapsedTime(started, ended).TotalSeconds:0}s"
+            : "Thinking";
         public string Text => _text.ToString();
 
         /// <summary>Streamed chunks; a close stand-in for tokens until the backend reports real counts.</summary>

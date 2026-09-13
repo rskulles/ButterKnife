@@ -98,13 +98,14 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         {
             insert.Transaction = (SqliteTransaction)tx;
             insert.CommandText = """
-                INSERT INTO messages (conversation_id, role, content, created_at)
-                VALUES ($cid, $role, $content, $now);
+                INSERT INTO messages (conversation_id, role, content, reasoning, created_at)
+                VALUES ($cid, $role, $content, $reasoning, $now);
                 SELECT last_insert_rowid();
                 """;
             insert.Parameters.AddWithValue("$cid", conversationId.ToString("D"));
             insert.Parameters.AddWithValue("$role", message.Role.ToString());
             insert.Parameters.AddWithValue("$content", message.Content);
+            insert.Parameters.AddWithValue("$reasoning", (object?)message.Reasoning ?? DBNull.Value);
             insert.Parameters.AddWithValue("$now", now);
             messageId = (long)(await insert.ExecuteScalarAsync(cancellationToken))!;
         }
@@ -270,7 +271,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         }
 
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT id, role, content, created_at FROM messages WHERE conversation_id = $cid ORDER BY id;";
+        cmd.CommandText = "SELECT id, role, content, created_at, reasoning FROM messages WHERE conversation_id = $cid ORDER BY id;";
         cmd.Parameters.AddWithValue("$cid", id.ToString("D"));
 
         var messages = new List<ChatMessage>();
@@ -285,6 +286,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
             {
                 Id = messageId,
                 CreatedAt = SqliteDatabase.Parse(reader.GetString(3)),
+                Reasoning = reader.IsDBNull(4) ? null : reader.GetString(4),
             });
         }
         return messages;

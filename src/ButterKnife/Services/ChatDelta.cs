@@ -54,10 +54,30 @@ public sealed record GenerationStats(
     }
 }
 
-/// <summary>One streamed item: a text delta, or a usage report (typically the last item).</summary>
-public readonly record struct ChatDelta(string? Text, TokenUsage? Usage)
+/// <summary>Why the backend stopped generating, when it says.</summary>
+public enum FinishReason
+{
+    /// <summary>The model finished on its own.</summary>
+    Stop,
+
+    /// <summary>The output token limit was reached; the reply is cut off and can be continued.</summary>
+    Length,
+
+    /// <summary>Anything else the backend reports (content filter, tool call, ...).</summary>
+    Other,
+}
+
+/// <summary>
+/// One streamed item: a text delta, a reasoning ("thinking") delta for models that expose it, a finish reason, or a
+/// usage report (typically the last item). Any combination may be null.
+/// </summary>
+public readonly record struct ChatDelta(string? Text, TokenUsage? Usage, string? Reasoning = null, FinishReason? Finish = null)
 {
     public static ChatDelta FromText(string text) => new(text, null);
+
+    public static ChatDelta FromReasoning(string reasoning) => new(null, null, reasoning);
+
+    public static ChatDelta FromFinish(FinishReason finish) => new(null, null, null, finish);
 
     public static ChatDelta FromUsage(TokenUsage usage) => new(null, usage);
 }

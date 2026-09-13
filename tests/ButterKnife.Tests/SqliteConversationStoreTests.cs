@@ -239,6 +239,18 @@ public sealed class SqliteConversationStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ReasoningRoundTrips()
+    {
+        var conv = await _store.CreateAsync("t", Guid.NewGuid(), "m", null, CancellationToken.None);
+        await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.User, "q"), CancellationToken.None);
+        await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.Assistant, "a") { Reasoning = "because" }, CancellationToken.None);
+
+        var loaded = (await _store.GetAsync(conv.Id, CancellationToken.None))!;
+        Assert.Null(loaded.Messages[0].Reasoning);
+        Assert.Equal("because", loaded.Messages[1].Reasoning);
+    }
+
+    [Fact]
     public async Task DeleteMessageRemovesOnlyThatMessageAndItsImages()
     {
         var conv = await _store.CreateAsync("t", Guid.NewGuid(), "m", null, CancellationToken.None);

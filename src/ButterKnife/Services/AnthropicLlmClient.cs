@@ -68,9 +68,16 @@ public sealed class AnthropicLlmClient : ILlmClient
 
         await foreach (var streamEvent in _client.Messages.CreateStreaming(parameters, cancellationToken))
         {
-            if (streamEvent.TryPickContentBlockDelta(out var blockDelta) && blockDelta.Delta.TryPickText(out var text))
+            if (streamEvent.TryPickContentBlockDelta(out var blockDelta))
             {
-                yield return ChatDelta.FromText(text.Text);
+                if (blockDelta.Delta.TryPickText(out var text))
+                {
+                    yield return ChatDelta.FromText(text.Text);
+                }
+                else if (blockDelta.Delta.TryPickThinking(out var thinking))
+                {
+                    yield return ChatDelta.FromReasoning(thinking.Thinking);
+                }
             }
             else if (streamEvent.TryPickStart(out var start))
             {
@@ -79,9 +86,15 @@ public sealed class AnthropicLlmClient : ILlmClient
             else if (streamEvent.TryPickDelta(out var messageDelta))
             {
                 outputTokens = (int?)messageDelta.Usage.OutputTokens;
-                if (messageDelta.Delta.StopReason == StopReason.Refusal)
+                var stop = messageDelta.Delta.StopReason;
+                if (stop == StopReason.Refusal)
                 {
                     refused = true;
+                }
+                else if (stop is not null)
+                {
+                    yield return ChatDelta.FromFinish(stop == StopReason.EndTurn || stop == StopReason.StopSequence ? FinishReason.Stop
+                        : stop == StopReason.MaxTokens ? FinishReason.Length : FinishReason.Other);
                 }
             }
         }

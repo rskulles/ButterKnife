@@ -65,6 +65,22 @@
     }
 }
 
+/* Collapsible reasoning above a reply: a quiet box, capped so a long think does not dwarf the answer. */
+.msg-thinking summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.msg-thinking summary::-webkit-details-marker {
+    display: none;
+}
+
+.msg-thinking > div {
+    max-height: 18rem;
+    overflow-y: auto;
+    border-left: 2px solid var(--bs-border-color);
+}
+
 .msg-image {
     max-height: 12rem;
     cursor: zoom-in;

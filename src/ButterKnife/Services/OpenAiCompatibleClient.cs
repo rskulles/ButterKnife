@@ -52,10 +52,23 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
                 throw new InvalidOperationException($"{BackendName}: {error.Message}");
             }
 
-            var delta = chunk?.Choices is { Length: > 0 } choices ? choices[0].Delta?.Content : null;
+            var choice = chunk?.Choices is { Length: > 0 } choices ? choices[0] : null;
+            // DeepSeek, vLLM and LM Studio put separated thinking in reasoning_content; a few servers use reasoning.
+            var reasoning = choice?.Delta?.ReasoningContent ?? choice?.Delta?.Reasoning;
+            if (!string.IsNullOrEmpty(reasoning))
+            {
+                yield return ChatDelta.FromReasoning(reasoning);
+            }
+
+            var delta = choice?.Delta?.Content;
             if (!string.IsNullOrEmpty(delta))
             {
                 yield return ChatDelta.FromText(delta);
+            }
+
+            if (choice?.FinishReason is { } finish)
+            {
+                yield return ChatDelta.FromFinish(finish == "stop" ? FinishReason.Stop : finish == "length" ? FinishReason.Length : FinishReason.Other);
             }
 
             // With stream_options.include_usage the final chunk carries usage (and usually no choices).
@@ -162,9 +175,9 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
 
     private sealed record LmStudioModel([property: JsonPropertyName("max_context_length")] int? MaxContextLength, string? Type);
 
-    private sealed record Choice(Delta? Delta);
+    private sealed record Choice(Delta? Delta, [property: JsonPropertyName("finish_reason")] string? FinishReason);
 
-    private sealed record Delta(string? Content);
+    private sealed record Delta(string? Content, [property: JsonPropertyName("reasoning_content")] string? ReasoningContent, string? Reasoning);
 
     private sealed record ErrorBody(string? Message);
 

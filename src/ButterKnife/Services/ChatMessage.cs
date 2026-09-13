@@ -32,6 +32,9 @@ public sealed record ChatMessage(ChatRole Role, string Content, IReadOnlyList<Ch
     /// <summary>When the message was stored; null for messages built for a request.</summary>
     public DateTimeOffset? CreatedAt { get; init; }
 
+    /// <summary>The model's visible reasoning for an assistant reply, kept for display only; clients never send it back.</summary>
+    public string? Reasoning { get; init; }
+
     public IReadOnlyList<ChatImage> Images { get; init; } = Images ?? NoImages;
 
     public bool HasImages => Images.Count > 0;

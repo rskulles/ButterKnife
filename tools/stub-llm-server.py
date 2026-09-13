@@ -40,6 +40,7 @@ def hi():
 import re
 DELAY = 0.08
 WORDS = re.findall(r"\S+\s*|\s+", REPLY)
+THINKING = re.findall(r"\S+\s*|\s+", "The user wants a markdown check. I should show a heading, some inline styles, a code block, a list, a table and a quote. ")
 
 class H(BaseHTTPRequestHandler):
     def _json(self, obj):
@@ -84,12 +85,23 @@ class H(BaseHTTPRequestHandler):
             self._json({"capabilities": caps, "model_info": {"general.architecture": "llama", "llama.context_length": 131072}}); return
         if self.path == "/api/chat":
             self.send_response(200); self.send_header("Content-Type", "application/x-ndjson"); self.end_headers()
+            # Thinking models (Ollama 0.9+) stream their reasoning in message.thinking before the answer.
+            for w in THINKING:
+                self.wfile.write((json.dumps({"model": body["model"], "message": {"role": "assistant", "content": "", "thinking": w}, "done": False}) + "\n").encode()); self.wfile.flush(); time.sleep(DELAY)
             for w in WORDS:
                 self.wfile.write((json.dumps({"model": body["model"], "message": {"role": "assistant", "content": w}, "done": False}) + "\n").encode()); self.wfile.flush(); time.sleep(DELAY)
             prompt_chars = sum(len(m.get("content") or "") for m in body.get("messages", []))
             self.wfile.write((json.dumps({"model": body["model"], "message": {"role": "assistant", "content": ""}, "done": True, "prompt_eval_count": max(1, prompt_chars // 4), "eval_count": len(WORDS), "prompt_eval_duration": 180000000, "eval_duration": int(len(WORDS) * 0.08 * 1e9)}) + "\n").encode()); self.wfile.flush()
         elif self.path == "/v1/chat/completions":
             self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+            # fake-gpt thinks inline with <think> tags (as Qwen3 does through llama.cpp/LM Studio); other models use the
+            # separated reasoning_content field (DeepSeek, vLLM).
+            if body.get("model") == "fake-gpt":
+                for w in ["<think>"] + THINKING + ["</think>"]:
+                    self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {"content": w}, "index": 0}]}) + "\n\n").encode()); self.wfile.flush(); time.sleep(DELAY)
+            else:
+                for w in THINKING:
+                    self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {"reasoning_content": w}, "index": 0}]}) + "\n\n").encode()); self.wfile.flush(); time.sleep(DELAY)
             for w in WORDS:
                 self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {"content": w}, "index": 0}]}) + "\n\n").encode()); self.wfile.flush(); time.sleep(DELAY)
             prompt_chars = sum(len(m.get("content") if isinstance(m.get("content"), str) else "") for m in body.get("messages", []))
