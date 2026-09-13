@@ -16,6 +16,64 @@ export function wireInput(textarea, component) {
     });
 }
 
+// Code blocks in rendered replies: syntax highlighting (highlight.js, loaded in App.razor) and a copy button.
+// Called from .NET once a transcript settles (load, reply finished); already-enhanced blocks are skipped, and a
+// block Blazor re-renders comes back without the marker, so it is enhanced again.
+export function enhanceCodeBlocks(root) {
+    if (!root) {
+        return;
+    }
+    for (const pre of root.querySelectorAll(".msg-markdown pre")) {
+        if (pre.dataset.enhanced === "1") {
+            continue;
+        }
+        pre.dataset.enhanced = "1";
+        const code = pre.querySelector("code");
+        if (code && window.hljs && !code.classList.contains("hljs")) {
+            try { window.hljs.highlightElement(code); } catch { /* unknown language: leave it plain */ }
+        }
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "code-copy btn btn-sm";
+        button.title = "Copy code";
+        button.setAttribute("aria-label", "Copy code");
+        button.innerHTML = '<i class="bi bi-clipboard" aria-hidden="true"></i>';
+        button.addEventListener("click", async () => {
+            const ok = await copyText(code ? code.innerText : pre.innerText);
+            button.innerHTML = ok
+                ? '<i class="bi bi-clipboard-check" aria-hidden="true"></i> Copied'
+                : '<i class="bi bi-clipboard-x" aria-hidden="true"></i> Failed';
+            setTimeout(() => { button.innerHTML = '<i class="bi bi-clipboard" aria-hidden="true"></i>'; }, 1500);
+        });
+        pre.appendChild(button);
+    }
+}
+
+// The async Clipboard API needs a secure context; a phone on http://192.168.x.x has none, so fall back to the
+// selection-based command, which still works there.
+export async function copyText(text) {
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch { /* fall through */ }
+    try {
+        const area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand("copy");
+        area.remove();
+        return ok;
+    } catch {
+        return false;
+    }
+}
+
 export function scrollToBottom(el) {
     if (el) {
         el.scrollTop = el.scrollHeight;

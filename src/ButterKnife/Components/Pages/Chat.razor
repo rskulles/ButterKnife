@@ -381,6 +381,9 @@
     private ChatTurn? _editing;
     private string _editText = "";
 
+    /// <summary>Set whenever the transcript changes outside streaming; the next render then highlights code blocks and adds copy buttons.</summary>
+    private bool _codeBlocksDirty;
+
     private ElementReference _messagesElement;
     private ElementReference _inputElement;
 
@@ -516,6 +519,8 @@
             _turns.Add(new ChatTurn(message.Role, message.Content, Markdown, message.Images, message.Reasoning) { MessageId = message.Id, CreatedAt = message.CreatedAt });
         }
 
+        _codeBlocksDirty = true;
+
         // The saved model is selected even before the model list has arrived; ReconcileSelection (now, or when the
         // list lands) swaps in the default with a note if it no longer exists.
         _selectedKey = ModelDescriptor.MakeKey(conversation.ConnectionId, conversation.Model);
@@ -539,6 +544,19 @@
                 _autoStop = prefs.AutoStop ?? _autoStop;
                 _autoSend = prefs.AutoSend ?? _autoSend;
                 StateHasChanged();
+            }
+        }
+
+        // Runs after the module exists, so a transcript loaded before the first render is enhanced too.
+        if (_codeBlocksDirty && !_isStreaming && _js is not null)
+        {
+            _codeBlocksDirty = false;
+            try
+            {
+                await _js.InvokeVoidAsync("enhanceCodeBlocks", _messagesElement);
+            }
+            catch (JSDisconnectedException)
+            {
             }
         }
     }
@@ -794,6 +812,7 @@
         }
 
         await PersistReplyAsync(conversationId, reply, completedText);
+        _codeBlocksDirty = true;
         await RenderAndScrollAsync();
         if (_js is not null)
         {

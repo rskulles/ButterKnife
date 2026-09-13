@@ -112,11 +112,44 @@
 }
 
 .msg-markdown ::deep pre {
-    background: #212529;
-    color: #f8f9fa;
+    position: relative; /* anchors the copy button */
+    background: #282c34; /* matches the atom-one-dark highlight theme */
+    color: #abb2bf;
     padding: 0.6rem 0.75rem;
     border-radius: 0.375rem;
     overflow-x: auto;
+}
+
+/* highlight.js styles the <code> too; the <pre> already provides the box. */
+.msg-markdown ::deep pre code.hljs {
+    padding: 0;
+    background: transparent;
+}
+
+/* Copy button in the top-right of a code block: quiet until hovered, always visible on touch screens. */
+.msg-markdown ::deep .code-copy {
+    position: absolute;
+    top: 0.3rem;
+    right: 0.3rem;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    color: #abb2bf;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.msg-markdown ::deep pre:hover .code-copy,
+.msg-markdown ::deep .code-copy:focus {
+    opacity: 1;
+}
+
+@media (hover: none) {
+    .msg-markdown ::deep .code-copy {
+        opacity: 1;
+    }
 }
 
 .msg-markdown ::deep code {
