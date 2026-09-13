@@ -12,8 +12,16 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
     public override async IAsyncEnumerable<ChatDelta> StreamChatAsync(
         string model,
         IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        options ??= ChatOptions.Default;
+        // A configured window is also the num_ctx we ask Ollama to run with; otherwise the server default applies.
+        // Sampling settings ride in the same "options" object; "think" is top-level (Ollama 0.9+ ignores it for
+        // models that cannot think).
+        var requestOptions = Connection.ContextWindow is null && options.Temperature is null && options.MaxTokens is null
+            ? null
+            : new RequestOptions(Connection.ContextWindow, options.Temperature, options.MaxTokens);
         var body = new ChatRequest(
             model,
             messages.Select(m => new WireMessage(
@@ -21,8 +29,8 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
                 m.Content,
                 m.HasImages ? m.Images.Select(i => i.Base64).ToArray() : null)).ToArray(),
             Stream: true,
-            // A configured window is also the num_ctx we ask Ollama to run with; otherwise the server default applies.
-            Options: Connection.ContextWindow is { } numCtx ? new RequestOptions(numCtx) : null);
+            Options: requestOptions,
+            Think: options.Think);
 
         var response = await PostStreamingAsync("api/chat", body, cancellationToken);
 
@@ -132,9 +140,12 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
         _ => throw new ArgumentOutOfRangeException(nameof(role), role, null),
     };
 
-    private sealed record ChatRequest(string Model, WireMessage[] Messages, bool Stream, RequestOptions? Options = null);
+    private sealed record ChatRequest(string Model, WireMessage[] Messages, bool Stream, RequestOptions? Options = null, bool? Think = null);
 
-    private sealed record RequestOptions([property: JsonPropertyName("num_ctx")] int NumCtx);
+    private sealed record RequestOptions(
+        [property: JsonPropertyName("num_ctx")] int? NumCtx,
+        double? Temperature,
+        [property: JsonPropertyName("num_predict")] int? NumPredict);
 
     private sealed record WireMessage(string Role, string Content, string[]? Images = null, string? Thinking = null);
 

@@ -49,7 +49,7 @@ public class ReasoningTests
             TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434"));
 
         var deltas = new List<ChatDelta>();
-        await foreach (var d in client.StreamChatAsync("m", Messages, CancellationToken.None))
+        await foreach (var d in client.StreamChatAsync("m", Messages, null, CancellationToken.None))
         {
             deltas.Add(d);
         }
@@ -78,7 +78,7 @@ public class ReasoningTests
             TestConnections.Make("X", BackendKind.OpenAiCompatible, "http://x.test/v1"));
 
         var deltas = new List<ChatDelta>();
-        await foreach (var d in client.StreamChatAsync("m", Messages, CancellationToken.None))
+        await foreach (var d in client.StreamChatAsync("m", Messages, null, CancellationToken.None))
         {
             deltas.Add(d);
         }

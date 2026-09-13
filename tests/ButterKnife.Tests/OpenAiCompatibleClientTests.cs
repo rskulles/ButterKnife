@@ -30,7 +30,7 @@ public class OpenAiCompatibleClientTests
         var factory = new StubClientFactory(handler, "http://lmstudio.test:1234/v1");
         var client = new OpenAiCompatibleClient(factory, TestConnections.Make("LM Studio", BackendKind.OpenAiCompatible, "http://lmstudio.test:1234/v1"));
 
-        var tokens = await client.StreamChatAsync("m", Messages, CancellationToken.None).ToTextListAsync();
+        var tokens = await client.StreamChatAsync("m", Messages, null, CancellationToken.None).ToTextListAsync();
 
         Assert.Equal(["Hel", "lo"], tokens);
         Assert.Equal("http://lmstudio.test:1234/v1/chat/completions", handler.LastRequest!.RequestUri!.ToString());
@@ -48,8 +48,7 @@ public class OpenAiCompatibleClientTests
         var jpeg = new byte[] { 0xFF, 0xD8, 0xFF };
 
         await client.StreamChatAsync("m",
-            [new(ChatRole.User, "describe", [new ChatImage("image/jpeg", jpeg)]), new(ChatRole.Assistant, "a cat")],
-            CancellationToken.None).ToTextListAsync();
+            [new(ChatRole.User, "describe", [new ChatImage("image/jpeg", jpeg)]), new(ChatRole.Assistant, "a cat")], null, CancellationToken.None).ToTextListAsync();
 
         using var body = JsonDocument.Parse(handler.LastRequestBody!);
         var messages = body.RootElement.GetProperty("messages");
@@ -69,7 +68,7 @@ public class OpenAiCompatibleClientTests
         var client = new OpenAiCompatibleClient(new StubClientFactory(handler, "http://x.test/v1"), TestConnections.Make("X", BackendKind.OpenAiCompatible, "http://x.test/v1"));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => client.StreamChatAsync("m", Messages, CancellationToken.None).ToTextListAsync());
+            () => client.StreamChatAsync("m", Messages, null, CancellationToken.None).ToTextListAsync());
 
         Assert.Contains("context length exceeded", ex.Message);
     }
@@ -81,7 +80,7 @@ public class OpenAiCompatibleClientTests
         var client = new OpenAiCompatibleClient(new StubClientFactory(handler, "http://x.test/v1"), TestConnections.Make("X", BackendKind.OpenAiCompatible, "http://x.test/v1"));
 
         var ex = await Assert.ThrowsAsync<LlmException>(
-            () => client.StreamChatAsync("m", Messages, CancellationToken.None).ToTextListAsync());
+            () => client.StreamChatAsync("m", Messages, null, CancellationToken.None).ToTextListAsync());
 
         Assert.Equal(HttpStatusCode.NotFound, ex.StatusCode);
     }

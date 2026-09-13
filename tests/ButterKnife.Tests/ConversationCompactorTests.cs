@@ -64,7 +64,7 @@ public class ConversationCompactorTests
         public string? LastModel { get; private set; }
         public IReadOnlyList<ChatMessage>? LastMessages { get; private set; }
 
-        public async IAsyncEnumerable<ChatDelta> StreamChatAsync(string model, IReadOnlyList<ChatMessage> messages,
+        public async IAsyncEnumerable<ChatDelta> StreamChatAsync(string model, IReadOnlyList<ChatMessage> messages, ChatOptions? options,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             LastModel = model;

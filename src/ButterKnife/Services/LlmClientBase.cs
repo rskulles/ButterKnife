@@ -29,6 +29,7 @@ public abstract class LlmClientBase(IHttpClientFactory httpClientFactory, LlmCon
     public abstract IAsyncEnumerable<ChatDelta> StreamChatAsync(
         string model,
         IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
         CancellationToken cancellationToken = default);
 
     public abstract Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken = default);

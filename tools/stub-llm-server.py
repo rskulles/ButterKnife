@@ -92,7 +92,8 @@ class H(BaseHTTPRequestHandler):
             if isinstance(c, list):
                 return sum(1 for part in c if part.get("type") in ("image_url", "image"))
             return len(m.get("images") or [])
-        print("POST", self.path, body.get("model"), [(m.get("role"), imgs(m)) for m in body.get("messages", [])], flush=True)
+        tuning = {k: body[k] for k in ("options", "think", "temperature", "max_tokens", "chat_template_kwargs", "thinking") if k in body}
+        print("POST", self.path, body.get("model"), [(m.get("role"), imgs(m)) for m in body.get("messages", [])], tuning or "", flush=True)
         if self.path == "/api/show":
             caps = ["completion", "vision"] if body.get("model") == "fake-llama:8b" else ["completion"]
             self._json({"capabilities": caps, "model_info": {"general.architecture": "llama", "llama.context_length": 131072}}); return

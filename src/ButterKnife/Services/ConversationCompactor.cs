@@ -79,7 +79,7 @@ public sealed class ConversationCompactor
         var request = BuildSummaryRequest(previousSummary, olderMessages);
         var summary = new StringBuilder();
 
-        await foreach (var delta in client.StreamChatAsync(model, request, cancellationToken))
+        await foreach (var delta in client.StreamChatAsync(model, request, null, cancellationToken))
         {
             if (delta.Text is { } text)
             {

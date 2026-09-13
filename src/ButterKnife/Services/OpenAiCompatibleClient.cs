@@ -18,13 +18,20 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
     public override async IAsyncEnumerable<ChatDelta> StreamChatAsync(
         string model,
         IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        options ??= ChatOptions.Default;
+        // temperature and max_tokens are standard. There is no standard thinking switch: chat_template_kwargs
+        // enable_thinking is what vLLM and llama.cpp honour for Qwen3-style models, and other servers ignore it.
         var body = new ChatRequest(
             model,
             messages.Select(m => new WireMessage(RoleName(m.Role), BuildContent(m))).ToArray(),
             Stream: true,
-            StreamOptions: new StreamOptions(IncludeUsage: true));
+            StreamOptions: new StreamOptions(IncludeUsage: true),
+            Temperature: options.Temperature,
+            MaxTokens: options.MaxTokens,
+            ChatTemplateKwargs: options.Think is { } think ? new ChatTemplateKwargs(think) : null);
 
         var response = await PostStreamingAsync("chat/completions", body, cancellationToken);
 
@@ -149,7 +156,16 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
         _ => throw new ArgumentOutOfRangeException(nameof(role), role, null),
     };
 
-    private sealed record ChatRequest(string Model, WireMessage[] Messages, bool Stream, [property: JsonPropertyName("stream_options")] StreamOptions? StreamOptions = null);
+    private sealed record ChatRequest(
+        string Model,
+        WireMessage[] Messages,
+        bool Stream,
+        [property: JsonPropertyName("stream_options")] StreamOptions? StreamOptions = null,
+        double? Temperature = null,
+        [property: JsonPropertyName("max_tokens")] int? MaxTokens = null,
+        [property: JsonPropertyName("chat_template_kwargs")] ChatTemplateKwargs? ChatTemplateKwargs = null);
+
+    private sealed record ChatTemplateKwargs([property: JsonPropertyName("enable_thinking")] bool EnableThinking);
 
     private sealed record StreamOptions([property: JsonPropertyName("include_usage")] bool IncludeUsage);
 

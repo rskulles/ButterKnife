@@ -72,7 +72,7 @@ public sealed class ChatTitlerTests
 
         public IReadOnlyList<ChatMessage>? LastMessages { get; private set; }
 
-        public async IAsyncEnumerable<ChatDelta> StreamChatAsync(string model, IReadOnlyList<ChatMessage> messages, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        public async IAsyncEnumerable<ChatDelta> StreamChatAsync(string model, IReadOnlyList<ChatMessage> messages, ChatOptions? options, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             LastMessages = messages;
             if (reply is null)

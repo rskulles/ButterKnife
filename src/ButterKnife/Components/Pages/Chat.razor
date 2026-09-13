@@ -393,6 +393,49 @@
             </div>
             <div class="input-group input-group-sm position-relative">
 
+                <button type="button" class="btn btn-secondary position-relative" @onclick="() => _showModelSettings = !_showModelSettings"
+                        title="Model settings: temperature, reply length, thinking" aria-label="Model settings"
+                        aria-expanded="@_showModelSettings" disabled="@_isStreaming">
+                    <i class="bi bi-sliders" aria-hidden="true"></i>
+                    @if (!_options.IsDefault)
+                    {
+                        <span class="position-absolute top-0 start-100 translate-middle p-1 bg-primary border border-light rounded-circle" aria-hidden="true"></span>
+                    }
+                </button>
+                @if (_showModelSettings)
+                {
+                    <div class="dropdown-menu show p-3 shadow small position-absolute start-0 bottom-100 mb-1"
+                         style="width: min(20rem, calc(100vw - 2rem))" role="dialog" aria-label="Model settings">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <label class="form-label mb-0" for="opt-temperature">Temperature</label>
+                            <span class="text-body-secondary">@(_options.Temperature is { } t ? t.ToString("0.0#") : "server default")</span>
+                        </div>
+                        <input type="range" class="form-range" id="opt-temperature" min="@ChatOptions.MinTemperature" max="@ChatOptions.MaxTemperature" step="0.1"
+                               value="@(_options.Temperature ?? 0.7)" @oninput="OnTemperatureInputAsync" />
+                        <div class="d-flex justify-content-between text-body-secondary" style="font-size: 0.75em">
+                            <span>precise</span>
+                            @if (_options.Temperature is not null)
+                            {
+                                <button type="button" class="btn btn-link btn-sm p-0" style="font-size: inherit" @onclick="() => SetOptionsAsync(_options with { Temperature = null })">use server default</button>
+                            }
+                            <span>creative</span>
+                        </div>
+
+                        <label class="form-label mt-3 mb-1" for="opt-max-tokens">Longest reply, in tokens</label>
+                        <input type="number" class="form-control form-control-sm" id="opt-max-tokens" min="1" step="1" placeholder="server default"
+                               value="@_options.MaxTokens" @onchange="OnMaxTokensChangedAsync" />
+                        <div class="form-text">Replies that hit the limit get a Continue button.</div>
+
+                        <label class="form-label mt-3 mb-1" for="opt-think">Thinking</label>
+                        <select class="form-select form-select-sm" id="opt-think" value="@ThinkOptionValue" @onchange="OnThinkChangedAsync">
+                            <option value="">Server default</option>
+                            <option value="on">On</option>
+                            <option value="off">Off</option>
+                        </select>
+                        <div class="form-text">For models that can reason first (Qwen3, DeepSeek, Claude). Others ignore it.</div>
+                        <div class="form-text mt-2">Saved with this chat.</div>
+                    </div>
+                }
                 <label class="visually-hidden" for="model-select">Model</label>
                 @* While the list is empty the saved key matches no option, so bind the placeholder instead of a blank.
                    Models are grouped by connection once there is more than one; a connection that did not answer is
@@ -553,6 +596,10 @@
     /// <summary>Set when a conversation is created; the first finished reply then asks the model for a proper title.</summary>
     private bool _titlePending;
 
+    /// <summary>Sampling settings for the open conversation (kept in memory for a new chat until it is created).</summary>
+    private ChatOptions _options = ChatOptions.Default;
+    private bool _showModelSettings;
+
     private ElementReference _messagesElement;
     private ElementReference _inputElement;
     private ElementReference _chatFrameElement;
@@ -666,6 +713,7 @@
         _error = null;
         _conversationId = Id;
         _title = null;
+        _options = ChatOptions.Default;
         _personaKey = DefaultPersonaKey();
         await (_compaction?.CancelAsync()??Task.CompletedTask);
         _summary = null;
@@ -691,6 +739,7 @@
 
         _title = conversation.Title;
         _personaKey = conversation.PersonaId?.ToString() ?? "";
+        _options = conversation.Options;
         _summary = conversation.Summary;
         _summaryThrough = Math.Min(conversation.SummaryThrough ?? 0, conversation.Messages.Count);
         _contextTokens = conversation.ContextTokens;
@@ -936,7 +985,7 @@
             var lastRender = Stopwatch.GetTimestamp();
             var splitter = new ThinkTagSplitter(); // models that think inline as <think>…</think>
 
-            await foreach (var delta in client.StreamChatAsync(model.Model, history, token))
+            await foreach (var delta in client.StreamChatAsync(model.Model, history, _options, token))
             {
                 if (delta.Usage is not null)
                 {
@@ -1099,7 +1148,7 @@
     {
         var client = await Registry.GetAsync(model.ConnectionId, token);
         var splitter = new ThinkTagSplitter();
-        await foreach (var delta in client.StreamChatAsync(model.Model, history, token))
+        await foreach (var delta in client.StreamChatAsync(model.Model, history, _options, token))
         {
             if (delta.Usage is not null)
             {
@@ -1452,12 +1501,55 @@
 
         var title = MakeTitle(firstPrompt);
         var conversation = await Store.CreateAsync(title, model.ConnectionId, model.Model, SelectedPersona?.Id, _disposed.Token);
+        if (!_options.IsDefault)
+        {
+            await Store.SetOptionsAsync(conversation.Id, _options, _disposed.Token);
+        }
         _conversationId = conversation.Id;
         _title = title;
         _titlePending = true;
         Events.NotifyChanged();
         Nav.NavigateTo($"/chat/{conversation.Id}", replace: true); // same component instance; OnParametersSetAsync sees the id already loaded
         return conversation.Id;
+    }
+
+    private string ThinkOptionValue => _options.Think switch { true => "on", false => "off", _ => "" };
+
+    private Task OnTemperatureInputAsync(ChangeEventArgs e) =>
+        double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var t)
+            ? SetOptionsAsync(_options with { Temperature = t })
+            : Task.CompletedTask;
+
+    private Task OnMaxTokensChangedAsync(ChangeEventArgs e) =>
+        SetOptionsAsync(_options with { MaxTokens = int.TryParse(e.Value?.ToString(), out var n) && n > 0 ? n : null });
+
+    private Task OnThinkChangedAsync(ChangeEventArgs e) =>
+        SetOptionsAsync(_options with { Think = e.Value?.ToString() switch { "on" => true, "off" => false, _ => null } });
+
+    /// <summary>Persists the sampling settings for an existing conversation; a new conversation gets them when it is created.</summary>
+    private async Task SetOptionsAsync(ChatOptions options)
+    {
+        _options = options with
+        {
+            Temperature = ChatOptions.NormalizeTemperature(options.Temperature),
+            MaxTokens = ChatOptions.NormalizeMaxTokens(options.MaxTokens),
+        };
+        if (_conversationId is not { } id)
+        {
+            return;
+        }
+
+        try
+        {
+            await Store.SetOptionsAsync(id, _options, _disposed.Token);
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = $"Model settings were not saved: {ex.Message}";
+        }
     }
 
     /// <summary>Persists the persona for an existing conversation; a new conversation carries it when it is created.</summary>

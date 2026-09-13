@@ -12,7 +12,7 @@ namespace ButterKnife.Services;
 public sealed class AnthropicLlmClient : ILlmClient
 {
     /// <summary>Streaming requests can afford generous room; hitting the cap truncates mid-thought.</summary>
-    private const long MaxOutputTokens = 64000;
+    private const int MaxOutputTokens = 64000;
 
     private readonly LlmConnection _connection;
     private readonly AnthropicClient _client;
@@ -45,8 +45,10 @@ public sealed class AnthropicLlmClient : ILlmClient
     public async IAsyncEnumerable<ChatDelta> StreamChatAsync(
         string model,
         IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        options ??= ChatOptions.Default;
         var system = string.Join("\n\n", messages.Where(m => m.Role == ChatRole.System).Select(m => m.Content));
 
         var chatMessages = messages
@@ -58,9 +60,18 @@ public sealed class AnthropicLlmClient : ILlmClient
             })
             .ToList();
 
+        // Temperature is not sent: current Claude models reject anything but the default. Extended thinking needs a
+        // budget below max_tokens (at least 1024).
+        var maxTokens = options.MaxTokens ?? MaxOutputTokens;
+        ThinkingConfigParam? thinkingConfig = options.Think switch
+        {
+            true => new ThinkingConfigEnabled { BudgetTokens = Math.Clamp(maxTokens / 2, 1024, 32000) },
+            false => new ThinkingConfigDisabled(),
+            null => null,
+        };
         var parameters = system.Length > 0
-            ? new MessageCreateParams { Model = model, MaxTokens = MaxOutputTokens, Messages = chatMessages, System = system }
-            : new MessageCreateParams { Model = model, MaxTokens = MaxOutputTokens, Messages = chatMessages };
+            ? new MessageCreateParams { Model = model, MaxTokens = maxTokens, Messages = chatMessages, System = system, Thinking = thinkingConfig }
+            : new MessageCreateParams { Model = model, MaxTokens = maxTokens, Messages = chatMessages, Thinking = thinkingConfig };
 
         var refused = false;
         int? inputTokens = null;

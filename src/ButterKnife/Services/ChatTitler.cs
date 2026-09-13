@@ -33,7 +33,7 @@ public sealed partial class ChatTitler(ILlmClientRegistry registry, ILogger<Chat
 
             var raw = new StringBuilder();
             var splitter = new ThinkTagSplitter(); // inline <think> blocks are not part of the title
-            await foreach (var delta in client.StreamChatAsync(model, messages, cancellationToken))
+            await foreach (var delta in client.StreamChatAsync(model, messages, null, cancellationToken))
             {
                 if (delta.Text is not { } text)
                 {

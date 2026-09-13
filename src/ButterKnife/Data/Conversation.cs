@@ -16,4 +16,8 @@ public sealed record Conversation(
     int? ContextWindow,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    IReadOnlyList<ChatMessage> Messages);
+    IReadOnlyList<ChatMessage> Messages)
+{
+    /// <summary>Sampling settings for this conversation; <see cref="ChatOptions.Default"/> means the server's defaults.</summary>
+    public ChatOptions Options { get; init; } = ChatOptions.Default;
+}

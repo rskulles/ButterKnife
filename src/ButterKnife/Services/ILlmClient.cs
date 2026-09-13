@@ -11,10 +11,14 @@ public interface ILlmClient
 
     string? DefaultModel { get; }
 
-    /// <summary>Streams text deltas and, when the backend reports it, a final usage item. Honour <paramref name="cancellationToken"/> on every await.</summary>
+    /// <summary>
+    /// Streams text deltas and, when the backend reports it, a final usage item. <paramref name="options"/> null
+    /// means the server's defaults. Honour <paramref name="cancellationToken"/> on every await.
+    /// </summary>
     IAsyncEnumerable<ChatDelta> StreamChatAsync(
         string model,
         IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken = default);

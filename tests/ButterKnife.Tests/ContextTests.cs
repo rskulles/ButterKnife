@@ -21,7 +21,7 @@ public class ContextTests
         var client = new OllamaClient(new StubClientFactory(handler, "http://ollama.test:11434"),
             TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434", contextWindow: 16384));
 
-        var usage = await client.StreamChatAsync("m", Messages, CancellationToken.None).LastUsageAsync();
+        var usage = await client.StreamChatAsync("m", Messages, null, CancellationToken.None).LastUsageAsync();
 
         Assert.Equal(new TokenUsage(120, 7, TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(1400)), usage);
         using var body = JsonDocument.Parse(handler.LastRequestBody!);
@@ -35,7 +35,7 @@ public class ContextTests
         var client = new OllamaClient(new StubClientFactory(handler, "http://ollama.test:11434"),
             TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434"));
 
-        var usage = await client.StreamChatAsync("m", Messages, CancellationToken.None).LastUsageAsync();
+        var usage = await client.StreamChatAsync("m", Messages, null, CancellationToken.None).LastUsageAsync();
 
         Assert.Null(usage);
         using var body = JsonDocument.Parse(handler.LastRequestBody!);
@@ -56,7 +56,7 @@ public class ContextTests
         var client = new OpenAiCompatibleClient(new StubClientFactory(handler, "http://x.test/v1"),
             TestConnections.Make("X", BackendKind.OpenAiCompatible, "http://x.test/v1"));
 
-        var usage = await client.StreamChatAsync("m", Messages, CancellationToken.None).LastUsageAsync();
+        var usage = await client.StreamChatAsync("m", Messages, null, CancellationToken.None).LastUsageAsync();
 
         Assert.Equal(new TokenUsage(88, 5), usage);
         using var body = JsonDocument.Parse(handler.LastRequestBody!);
@@ -85,7 +85,7 @@ public class ContextTests
             TestConnections.Make("Claude", BackendKind.Anthropic, "http://anthropic.test", apiKey: "k"),
             new HttpClient(handler, disposeHandler: false));
 
-        var usage = await client.StreamChatAsync("claude-opus-5", Messages, CancellationToken.None).LastUsageAsync();
+        var usage = await client.StreamChatAsync("claude-opus-5", Messages, null, CancellationToken.None).LastUsageAsync();
 
         Assert.Equal(new TokenUsage(410, 42), usage);
     }

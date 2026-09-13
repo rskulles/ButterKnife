@@ -39,7 +39,7 @@ public class ModelCatalogTests
         public string BackendName => name;
         public string? DefaultModel => defaultModel;
 
-        public IAsyncEnumerable<ChatDelta> StreamChatAsync(string model, IReadOnlyList<ChatMessage> messages, CancellationToken cancellationToken = default)
+        public IAsyncEnumerable<ChatDelta> StreamChatAsync(string model, IReadOnlyList<ChatMessage> messages, ChatOptions? options, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
         public Task<int?> GetContextWindowAsync(string model, CancellationToken cancellationToken = default) => Task.FromResult<int?>(null);

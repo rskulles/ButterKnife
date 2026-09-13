@@ -32,7 +32,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         await using var connection = await db.OpenAsync(cancellationToken);
 
         await using var head = connection.CreateCommand();
-        head.CommandText = "SELECT title, backend, model, persona_id, summary, summary_through, context_tokens, context_window, created_at, updated_at FROM conversations WHERE id = $id;";
+        head.CommandText = "SELECT title, backend, model, persona_id, summary, summary_through, context_tokens, context_window, created_at, updated_at, temperature, max_tokens, think FROM conversations WHERE id = $id;";
         head.Parameters.AddWithValue("$id", id.ToString("D"));
 
         await using var reader = await head.ExecuteReaderAsync(cancellationToken);
@@ -52,9 +52,13 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         int? contextWindow = reader.IsDBNull(7) ? null : (int)reader.GetInt64(7);
         var createdAt = SqliteDatabase.Parse(reader.GetString(8));
         var updatedAt = SqliteDatabase.Parse(reader.GetString(9));
+        var options = new ChatOptions(
+            reader.IsDBNull(10) ? null : reader.GetDouble(10),
+            reader.IsDBNull(11) ? null : (int)reader.GetInt64(11),
+            reader.IsDBNull(12) ? null : reader.GetInt64(12) != 0);
 
         var messages = await LoadMessagesAsync(connection, id, cancellationToken);
-        return new Conversation(id, title, connectionId, model, personaId, summary, summaryThrough, contextTokens, contextWindow, createdAt, updatedAt, messages);
+        return new Conversation(id, title, connectionId, model, personaId, summary, summaryThrough, contextTokens, contextWindow, createdAt, updatedAt, messages) { Options = options };
     }
 
     public async Task<IReadOnlyList<ConversationSummary>> ListAsync(CancellationToken cancellationToken = default)
@@ -241,6 +245,18 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task SetOptionsAsync(Guid conversationId, ChatOptions options, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await db.OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE conversations SET temperature = $temperature, max_tokens = $maxTokens, think = $think WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$temperature", (object?)ChatOptions.NormalizeTemperature(options.Temperature) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$maxTokens", (object?)ChatOptions.NormalizeMaxTokens(options.MaxTokens) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$think", options.Think is { } think ? (think ? 1 : 0) : DBNull.Value);
+        cmd.Parameters.AddWithValue("$id", conversationId.ToString("D"));
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task SetContextUsageAsync(Guid conversationId, int? contextTokens, int? contextWindow, CancellationToken cancellationToken = default)
     {
         await using var connection = await db.OpenAsync(cancellationToken);
@@ -263,6 +279,10 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         }
 
         var branch = await CreateAsync(title, source.ConnectionId, source.Model, source.PersonaId, cancellationToken);
+        if (!source.Options.IsDefault)
+        {
+            await SetOptionsAsync(branch.Id, source.Options, cancellationToken);
+        }
         foreach (var message in kept)
         {
             await AppendMessageAsync(branch.Id, message, cancellationToken);

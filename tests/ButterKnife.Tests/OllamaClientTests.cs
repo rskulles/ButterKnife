@@ -27,7 +27,7 @@ public class OllamaClientTests
         var factory = new StubClientFactory(handler, "http://ollama.test:11434");
         var client = new OllamaClient(factory, TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434", "m"));
 
-        var tokens = await client.StreamChatAsync("m", Messages, CancellationToken.None).ToTextListAsync();
+        var tokens = await client.StreamChatAsync("m", Messages, null, CancellationToken.None).ToTextListAsync();
 
         Assert.Equal(["Hel", "lo"], tokens);
         Assert.Equal(LlmClientBase.HttpClientName, factory.LastName);
@@ -49,7 +49,7 @@ public class OllamaClientTests
         var client = new OllamaClient(new StubClientFactory(handler, "http://ollama.test:11434"), TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434"));
         var png = new byte[] { 0x89, 0x50, 0x4E, 0x47 };
 
-        await client.StreamChatAsync("m", [new(ChatRole.User, "what is this?", [new ChatImage("image/png", png)])], CancellationToken.None).ToTextListAsync();
+        await client.StreamChatAsync("m", [new(ChatRole.User, "what is this?", [new ChatImage("image/png", png)])], null, CancellationToken.None).ToTextListAsync();
 
         using var body = JsonDocument.Parse(handler.LastRequestBody!);
         var msg = body.RootElement.GetProperty("messages")[0];
@@ -58,7 +58,7 @@ public class OllamaClientTests
 
         handler = StubHandler.Text("""{"message":{"content":"ok"},"done":true}""");
         client = new OllamaClient(new StubClientFactory(handler, "http://ollama.test:11434"), TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434"));
-        await client.StreamChatAsync("m", [new(ChatRole.User, "text only")], CancellationToken.None).ToTextListAsync();
+        await client.StreamChatAsync("m", [new(ChatRole.User, "text only")], null, CancellationToken.None).ToTextListAsync();
         using var body2 = JsonDocument.Parse(handler.LastRequestBody!);
         Assert.False(body2.RootElement.GetProperty("messages")[0].TryGetProperty("images", out _), "images must be omitted when absent");
     }
@@ -70,7 +70,7 @@ public class OllamaClientTests
         var client = new OllamaClient(new StubClientFactory(handler, "http://ollama.test:11434"), TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434"));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => client.StreamChatAsync("nope", Messages, CancellationToken.None).ToTextListAsync());
+            () => client.StreamChatAsync("nope", Messages, null, CancellationToken.None).ToTextListAsync());
 
         Assert.Contains("not found", ex.Message);
     }
@@ -82,7 +82,7 @@ public class OllamaClientTests
         var client = new OllamaClient(new StubClientFactory(handler, "http://ollama.test:11434"), TestConnections.Make("Ollama", BackendKind.Ollama, "http://ollama.test:11434"));
 
         var ex = await Assert.ThrowsAsync<LlmException>(
-            () => client.StreamChatAsync("m", Messages, CancellationToken.None).ToTextListAsync());
+            () => client.StreamChatAsync("m", Messages, null, CancellationToken.None).ToTextListAsync());
 
         Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
         Assert.Contains("boom", ex.Body);
@@ -101,7 +101,7 @@ public class OllamaClientTests
 
         var task = Task.Run(async () =>
         {
-            await foreach (var t in client.StreamChatAsync("m", Messages, cts.Token))
+            await foreach (var t in client.StreamChatAsync("m", Messages, null, cts.Token))
             {
                 received.Add(t.Text ?? "");
                 cts.Cancel(); // cancel as soon as the first token arrives; the stream never ends on its own
