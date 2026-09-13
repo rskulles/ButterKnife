@@ -1,7 +1,10 @@
 let componentRef = null;
+let composer = null;
+let shortcutHandler = null;
 
 export function wireInput(textarea, component) {
     componentRef = component;
+    composer = textarea;
     if (!textarea || textarea.dataset.wired === "1") {
         return;
     }
@@ -14,6 +17,37 @@ export function wireInput(textarea, component) {
             }
         }
     });
+}
+
+// ---- Keyboard shortcuts -------------------------------------------------------------------------
+// Page-wide keys: Esc stops a reply, Shift+Esc jumps to the composer, Ctrl/Cmd+Shift+O starts a new chat.
+// Plain Esc is left alone inside other inputs (a rename box, a dialog) so their own handling wins.
+export function wireShortcuts(component) {
+    unwireShortcuts();
+    shortcutHandler = (e) => {
+        if (e.isComposing) {
+            return;
+        }
+        const inField = e.target instanceof HTMLElement && e.target !== composer
+            && (e.target.matches("input, textarea, select, [contenteditable=true]"));
+        if (e.key === "Escape" && e.shiftKey) {
+            e.preventDefault();
+            composer?.focus();
+        } else if (e.key === "Escape" && !inField) {
+            component.invokeMethodAsync("OnShortcutAsync", "stop");
+        } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "O" || e.key === "o")) {
+            e.preventDefault();
+            component.invokeMethodAsync("OnShortcutAsync", "new-chat");
+        }
+    };
+    document.addEventListener("keydown", shortcutHandler);
+}
+
+export function unwireShortcuts() {
+    if (shortcutHandler) {
+        document.removeEventListener("keydown", shortcutHandler);
+        shortcutHandler = null;
+    }
 }
 
 // ---- Images from the clipboard or drag-and-drop -------------------------------------------------

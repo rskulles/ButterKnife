@@ -519,11 +519,11 @@
                 </button>
                 @if (_isStreaming)
                 {
-                    <button class="btn btn-danger" @onclick="Stop"><i class="bi bi-stop-btn"></i></button>
+                    <button class="btn btn-danger" @onclick="Stop" title="Stop (Esc)" aria-label="Stop"><i class="bi bi-stop-btn"></i></button>
                 }
                 else
                 {
-                    <button class="btn btn-primary" @onclick="SendAsync" disabled="@(!CanSend)"><i
+                    <button class="btn btn-primary" @onclick="SendAsync" disabled="@(!CanSend)" title="Send (Enter)" aria-label="Send"><i
                             class="bi bi-arrow-bar-up"></i></button>
                 }
             </div>
@@ -828,6 +828,7 @@
             _self = DotNetObjectReference.Create(this);
             // The textarea element survives re-renders (only its attributes change), so one wiring is enough.
             await _js.InvokeVoidAsync("wireInput", _inputElement, _self);
+            await _js.InvokeVoidAsync("wireShortcuts", _self);
             await _js.InvokeVoidAsync("wireImageInput", _chatFrameElement, _inputElement, _self);
             await _js.InvokeVoidAsync("wireScroll", _messagesElement);
 
@@ -951,6 +952,22 @@
     /// <summary>Called from JS when Enter (without Shift) is pressed in the textarea.</summary>
     [JSInvokable]
     public Task SendFromKeyboardAsync() => SendAsync();
+
+    /// <summary>Page-wide keys from the JS module: Esc stops the reply, Ctrl/⌘+Shift+O opens a new chat.</summary>
+    [JSInvokable]
+    public Task OnShortcutAsync(string action)
+    {
+        switch (action)
+        {
+            case "stop" when _isStreaming:
+                Stop();
+                break;
+            case "new-chat" when _conversationId is not null || _input.Length > 0:
+                Nav.NavigateTo("/");
+                break;
+        }
+        return Task.CompletedTask;
+    }
 
     private async Task SendAsync()
     {
@@ -1740,6 +1757,16 @@
 
     public async ValueTask DisposeAsync()
     {
+        if (_js is not null)
+        {
+            try
+            {
+                await _js.InvokeVoidAsync("unwireShortcuts");
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
         if (_js is not null && _speaking is not null)
         {
             try

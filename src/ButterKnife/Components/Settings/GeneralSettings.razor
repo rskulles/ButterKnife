@@ -148,6 +148,16 @@
             <div class="small mt-2 @(_pinOk ? "text-success" : "text-danger")" role="status">@_pinMessage</div>
         }
 
+        <hr class="my-4" />
+
+        <h2 class="h6">Keyboard shortcuts</h2>
+        <dl class="row small mb-0">
+            <dt class="col-5 col-md-4 fw-normal"><kbd>Enter</kbd></dt><dd class="col-7 col-md-8">Send (<kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line)</dd>
+            <dt class="col-5 col-md-4 fw-normal"><kbd>Esc</kbd></dt><dd class="col-7 col-md-8">Stop the reply</dd>
+            <dt class="col-5 col-md-4 fw-normal"><kbd>Shift</kbd>+<kbd>Esc</kbd></dt><dd class="col-7 col-md-8">Jump to the message box</dd>
+            <dt class="col-5 col-md-4 fw-normal"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd></dt><dd class="col-7 col-md-8">New chat (<kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd> on a Mac)</dd>
+        </dl>
+
         @if (DesktopLauncher.IsBundled)
         {
             <hr class="my-4" />
