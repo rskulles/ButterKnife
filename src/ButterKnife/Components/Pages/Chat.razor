@@ -2045,10 +2045,10 @@
             _reasoning.Append(chunk);
         }
 
-        /// <summary>"Thought for 12s" when the thinking was timed in this session, else just "Thinking".</summary>
+        /// <summary>"Thought for 12s" when the thinking was timed in this session; "Reasoning" for a reply loaded from the store, where the duration is unknown.</summary>
         public string ThinkingLabel => _thinkingStartedAt is { } started && _thinkingEndedAt is { } ended
             ? $"Thought for {Stopwatch.GetElapsedTime(started, ended).TotalSeconds:0}s"
-            : "Thinking";
+            : "Reasoning";
         public string Text => _text.ToString();
 
         /// <summary>Streamed chunks; a close stand-in for tokens until the backend reports real counts.</summary>
