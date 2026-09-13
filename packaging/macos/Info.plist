@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Filled in by tools/make-macos-app.sh: __VERSION__ -->
+    <key>CFBundleName</key><string>ButterKnife</string>
+    <key>CFBundleDisplayName</key><string>ButterKnife</string>
+    <key>CFBundleIdentifier</key><string>fun.imsuper.butterknife</string>
+    <key>CFBundleExecutable</key><string>ButterKnifeMenu</string>
+    <key>CFBundleIconFile</key><string>ButterKnife</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+    <key>CFBundleVersion</key><string>__VERSION__</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>LSMinimumSystemVersion</key><string>12.0</string>
+    <!-- A server with a browser UI: no Dock icon or menu bar. Quit from Settings in the app. -->
+    <key>LSUIElement</key><true/>
+    <key>NSHumanReadableCopyright</key><string>Copyright Roy Skullestad. PolyForm Noncommercial License 1.0.0.</string>
+    <key>NSLocalNetworkUsageDescription</key><string>ButterKnife talks to LLM servers on your local network and can be opened from other devices on it.</string>
+</dict>
+</plist>

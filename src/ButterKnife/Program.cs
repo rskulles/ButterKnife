@@ -2,7 +2,10 @@ using ButterKnife.Components;
 using ButterKnife.Data;
 using ButterKnife.Services;
 
-var builder = WebApplication.CreateBuilder(args);
+// Published single-file builds get "download and run" defaults (content root beside the executable, key ring in
+// data/keys, port 5175, browser on start); see DesktopLauncher. dotnet run is unaffected.
+var builder = WebApplication.CreateBuilder(DesktopLauncher.Options(args));
+DesktopLauncher.Configure(builder);
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -35,8 +38,8 @@ app.UseHttpsRedirection();
 
 app.UseAntiforgery();
 
-app.MapStaticAssets();
+app.MapStaticAssets(DesktopLauncher.StaticAssetsManifestPath);
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
-app.Run();
+DesktopLauncher.Run(app);

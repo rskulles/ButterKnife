@@ -1,0 +1,206 @@
+# Release: on a version tag (v1.2.3), publish self-contained single-file builds for every platform, sign the
+# Windows executable with Azure Artifact Signing, sign and notarize the macOS builds when the Apple secrets are
+# present, and attach the archives to a GitHub release.
+#
+# Secrets live on the "release" environment:
+#   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_SUBSCRIPTION_ID   federated (OIDC) login for Artifact Signing
+#   APPLE_CERTIFICATE_P12, APPLE_CERTIFICATE_PASSWORD         Developer ID Application certificate, base64 .p12
+#   APPLE_NOTARY_KEY_ID, APPLE_NOTARY_ISSUER_ID, APPLE_NOTARY_KEY   App Store Connect API key (.p8 contents)
+# The macOS signing steps are skipped when APPLE_CERTIFICATE_P12 is unset, so releases work before that is set up.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  SIGNING_ACCOUNT: artifacts-imsuper-fun
+  SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
+  SIGNING_PROFILE: butterknife
+
+jobs:
+  build:
+    name: Publish ${{ matrix.rid }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rid: [win-x64, osx-arm64, osx-x64, linux-x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Version from tag
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"; else echo "value=0.0.0-ci" >> "$GITHUB_OUTPUT"; fi
+      - name: Publish
+        run: dotnet publish src/ButterKnife -c Release -r ${{ matrix.rid }} -o out/${{ matrix.rid }} -p:Version=${{ steps.version.outputs.value }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: publish-${{ matrix.rid }}
+          path: out/${{ matrix.rid }}
+          if-no-files-found: error
+
+  sign-windows:
+    name: Sign Windows
+    needs: build
+    runs-on: windows-latest
+    environment: release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: publish-win-x64
+          path: out/win-x64
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ env.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ env.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ env.SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}/out/win-x64
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Archive
+        shell: pwsh
+        run: Compress-Archive -Path out/win-x64/* -DestinationPath ButterKnife-${{ github.ref_name }}-win-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-win-x64
+          path: ButterKnife-*-win-x64.zip
+
+  sign-macos:
+    name: macOS ${{ matrix.rid }}
+    needs: build
+    runs-on: macos-latest
+    environment: release
+    strategy:
+      matrix:
+        rid: [osx-arm64, osx-x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: publish-${{ matrix.rid }}
+          path: out/${{ matrix.rid }}
+      - name: Build ButterKnife.app
+        run: tools/make-macos-app.sh out/${{ matrix.rid }} "${GITHUB_REF_NAME#v}" out/app-${{ matrix.rid }} ${{ matrix.rid == 'osx-arm64' && 'arm64' || 'x86_64' }}
+      - name: Import Developer ID certificate
+        if: env.APPLE_CERTIFICATE_P12 != ''
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN=$RUNNER_TEMP/signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
+          echo "$APPLE_CERTIFICATE_P12" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import $RUNNER_TEMP/cert.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+          rm $RUNNER_TEMP/cert.p12
+      - name: Sign, notarize and staple
+        if: env.APPLE_CERTIFICATE_P12 != ''
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+        run: |
+          APP=out/app-${{ matrix.rid }}/ButterKnife.app
+          IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          # Inner executables first (the .NET server needs its entitlements under the hardened runtime; the Swift menu
+          # bar helper needs none), then the bundle as a whole.
+          codesign --force --options runtime --timestamp --entitlements packaging/macos/entitlements.plist --sign "$IDENTITY" "$APP/Contents/MacOS/ButterKnife"
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP/Contents/MacOS/ButterKnifeMenu"
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          echo "$APPLE_NOTARY_KEY" > $RUNNER_TEMP/notary.p8
+          ditto -c -k --keepParent "$APP" $RUNNER_TEMP/notarize.zip
+          xcrun notarytool submit $RUNNER_TEMP/notarize.zip --key $RUNNER_TEMP/notary.p8 --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" --wait
+          xcrun stapler staple "$APP"
+          rm $RUNNER_TEMP/notary.p8
+      - name: Disk image
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+        run: |
+          DMG=ButterKnife-${{ github.ref_name }}-${{ matrix.rid }}.dmg
+          STAGE=$RUNNER_TEMP/dmg && mkdir -p "$STAGE"
+          cp -R out/app-${{ matrix.rid }}/ButterKnife.app "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname ButterKnife -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+          if [ -n "$APPLE_CERTIFICATE_P12" ]; then
+            IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
+            codesign --force --timestamp --sign "$IDENTITY" "$DMG"
+            echo "$APPLE_NOTARY_KEY" > $RUNNER_TEMP/notary.p8
+            xcrun notarytool submit "$DMG" --key $RUNNER_TEMP/notary.p8 --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" --wait
+            xcrun stapler staple "$DMG"
+            rm $RUNNER_TEMP/notary.p8
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.rid }}
+          path: ButterKnife-*-${{ matrix.rid }}.dmg
+
+  package-linux:
+    name: Package Linux
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: publish-linux-x64
+          path: out/linux-x64
+      - name: Archive
+        run: chmod +x out/linux-x64/ButterKnife && tar -C out -czf ButterKnife-${{ github.ref_name }}-linux-x64.tar.gz linux-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-x64
+          path: ButterKnife-*-linux-x64.tar.gz
+
+  release:
+    name: GitHub release
+    needs: [sign-windows, sign-macos, package-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

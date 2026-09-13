@@ -6,6 +6,7 @@
 @inject SettingsEvents Events
 @inject LanAddressService Lan
 @inject NavigationManager Nav
+@inject IHostApplicationLifetime Lifetime
 
 <h1 class="h4">General</h1>
 <p class="text-muted">Applies to everyone who opens this ButterKnife, on any device.</p>
@@ -56,6 +57,15 @@
                 <span class="text-warning-emphasis"><i class="bi bi-arrow-repeat me-1" aria-hidden="true"></i>Restart ButterKnife to apply. It is currently @(_access.ListensOnLan ? "reachable on the local network" : "localhost only").</span>
             }
         </div>
+
+        @if (DesktopLauncher.IsBundled)
+        {
+            <hr class="my-4" />
+            <button type="button" class="btn btn-outline-danger" @onclick="Quit">
+                <i class="bi bi-power me-1" aria-hidden="true"></i>Quit ButterKnife
+            </button>
+            <div class="form-text">Stops the server on this computer. Nothing is lost: chats and settings are saved as you go.</div>
+        }
     </div>
 </div>
 
@@ -155,6 +165,9 @@
             _busy = false;
         }
     }
+
+    /// <summary>The published app has no window to close, so Settings offers the way out.</summary>
+    private void Quit() => Lifetime.StopApplication();
 
     public void Dispose() => Events.Changed -= OnChanged;
 }

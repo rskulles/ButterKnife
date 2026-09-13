@@ -488,3 +488,6 @@ src/ButterKnife/data/*.db-*
 
 # Client-side libraries are restored by LibMan (libman.json) at build time
 src/ButterKnife/wwwroot/lib/
+
+# Local `dotnet publish -o out/...` output (see README "Releases")
+out/

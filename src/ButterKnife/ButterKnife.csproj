@@ -5,7 +5,35 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <ApplicationIcon>../../packaging/windows/ButterKnife.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <!-- Windows release: the same executable is a windowless tray app (Services/WindowsTray.cs, compiled only under the
+       net10.0-windows TFM, which defines WINDOWS) that hosts Kestrel in the background. Chosen by RID so development
+       builds stay plain net10.0; EnableWindowsTargeting lets the Linux CI runner build it. -->
+  <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <OutputType>WinExe</OutputType>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <!-- Release builds: `dotnet publish -r <rid>` produces a self-contained single executable (plus wwwroot) that runs
+       without a .NET install. Trimming stays off: Blazor Server and the SDKs rely on reflection. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
+    <DebugType>none</DebugType>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!-- Development-only files stay out of the published folder. -->
+  <ItemGroup>
+    <Content Update="libman.json;appsettings.Development.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Anthropic" Version="12.46.0" />

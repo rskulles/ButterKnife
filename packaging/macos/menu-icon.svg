@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
+  <!-- Menu bar template image: the knife silhouette in black on transparent; macOS recolours it for light/dark. -->
+  <g transform="translate(18 18) rotate(-32) scale(0.075) translate(-215 -70)">
+    <path fill="#000" d="M28 42 H170 C 178 42, 182 48, 182 56 V64 H196 C 204 42, 226 28, 252 28 H326 C 358 28, 388 34, 402 46 C 408 52, 406 62, 400 70 L386 92 C 380 100, 372 104, 360 104 H196 V86 H182 V94 C 182 102, 178 108, 170 108 H28 A33 33 0 0 1 28 42 Z"/>
+  </g>
+</svg>

@@ -28,7 +28,29 @@ image attachments, dictates prompts through a local Whisper server, and keeps ev
 - Everything persists server-side, so a phone and a laptop on the LAN see the same conversations. Chats can be
   renamed and deleted from the sidebar or the chat toolbar, with an inline confirmation before deleting.
 
-## Quick start
+## Download and run
+
+Grab the build for your machine from the [Releases page](https://github.com/rskulles/ButterKnife/releases). Nothing else
+to install: the .NET runtime is inside.
+
+- **Windows**: unzip, run `ButterKnife.exe`. It has no window of its own: a butter knife appears in the system tray
+  with *Open ButterKnife*, *Copy address for phone* and *Quit*. The executable is code-signed; if SmartScreen still
+  shows "Windows protected your PC" while the certificate is new, click *More info* then *Run anyway*. Its database,
+  keys and log live in a `data` folder next to the executable, so the folder can be moved or backed up as one.
+- **macOS**: open the `.dmg` for Apple Silicon (`osx-arm64`) or Intel (`osx-x64`) and drag ButterKnife to
+  Applications. The app is signed and notarized. It lives in the menu bar (no Dock icon) with the same three items.
+  Data is in `~/Library/Application Support/ButterKnife`, the server log in `~/Library/Logs/ButterKnife`.
+- **Linux**: unpack the `.tar.gz` and run `./ButterKnife` in a terminal; Ctrl+C stops it. Data lives in `data` next
+  to the executable.
+
+The app opens in your browser at <http://localhost:5175>. Set `BUTTERKNIFE_NO_BROWSER=1` to stop it opening a browser,
+and `ASPNETCORE_URLS` to change the port. **Settings → General** also has a *Quit ButterKnife* button, handy from a
+phone.
+
+Then go to **Settings → Connections** and add your servers with the preset buttons. To reach the app from other devices on
+your network, turn on **Reachable from other devices on the local network** under **Settings → General** and restart.
+
+## Quick start from source
 
 Requires the .NET 10 SDK.
 
@@ -36,9 +58,7 @@ Requires the .NET 10 SDK.
 dotnet run --project src/ButterKnife
 ```
 
-Open <http://localhost:5175>, go to **Settings → Connections**, and add your servers with the preset buttons. To reach the app
-from other devices on your network, turn on **Reachable from other devices on the local network** under **Settings →
-General** and restart, or start it bound to all interfaces once:
+Open <http://localhost:5175>. The network switch above works here too; to bind to all interfaces once without it:
 
 ```bash
 dotnet run --project src/ButterKnife --urls http://0.0.0.0:5175
@@ -61,7 +81,7 @@ Notes per server:
 | Section | Keys | Purpose |
 |---|---|---|
 | `Database` | `ConnectionString` | SQLite file; default `Data Source=data/butterknife.db`, relative to the app. Git-ignored. |
-| `Llm` | `Backends` | Seed connections, used only when the connections table is empty on first start. |
+| `Llm` | `Backends` | Seed connections, used only when the connections table is empty on first start. Empty by default; `appsettings.Development.json` seeds two placeholders for development. |
 | `Llm` | `DefaultPersona`, `AutoCompactThreshold`, `CompactKeepRecentTurns` | New-chat persona; compact when usage passes this fraction of the window (0 disables); turns kept verbatim after a compaction. |
 | `Dictation` | `AutoStopOnSilence`, `AutoSendAfterTranscription`, `SilenceDurationMs`, `MaxRecordingSeconds` | Defaults for the microphone; each browser can override the two toggles from the ⚙ beside the mic. |
 
@@ -127,6 +147,21 @@ python3 tools/stub-llm-server.py --delay 0.25   # slower tokens make streaming U
 
 It logs every request with the roles and image counts it carried. `.claude/launch.json` has a `butterknife-fake-llm`
 profile that starts the app on port 5176 with seed connections already pointing at the stub.
+
+### Releases
+
+Pushing a tag like `v1.2.0` runs `.github/workflows/release.yml`: it publishes self-contained single-file builds for
+Windows, macOS (Apple Silicon and Intel) and Linux, signs the Windows executable with Azure Artifact Signing, wraps the
+macOS builds in `ButterKnife.app` (`tools/make-macos-app.sh`, `packaging/macos/`) and signs, notarizes and staples them
+into a `.dmg` when the Apple secrets are configured, and attaches everything plus a `SHA256SUMS.txt` to a GitHub release.
+The Windows build is the same executable compiled as a windowless tray app (`net10.0-windows`, chosen by RID); the
+macOS bundle's main executable is a small Swift menu bar helper (`packaging/macos/ButterKnifeMenu`) that launches the
+server. The app icon is drawn in `packaging/macos/icon.svg`; the `.icns`, Windows `.ico`, favicon, touch icon and menu
+bar icon are rendered from it. To build the same thing locally:
+
+```bash
+dotnet publish src/ButterKnife -c Release -r osx-arm64 -o out/osx-arm64   # or win-x64, osx-x64, linux-x64
+```
 
 The chat page's JS module exposes two test hooks used by browser-driven checks: `debugInjectRecording` runs the
 transcription path without a microphone, and `debugUseSyntheticMicrophone` feeds the silence detector a tone.
