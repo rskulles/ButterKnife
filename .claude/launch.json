@@ -44,6 +44,24 @@
         "http://0.0.0.0:5175"
       ],
       "port": 5175
+    },
+    {
+      "name": "butterknife-test",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "ASPNETCORE_ENVIRONMENT=Development",
+        "Database__ConnectionString=Data Source=data/test.db",
+        "Llm__Backends__0__BaseUrl=http://127.0.0.1:11434",
+        "Llm__Backends__1__BaseUrl=http://127.0.0.1:11434/v1",
+        "dotnet",
+        "run",
+        "--project",
+        "src/ButterKnife",
+        "--no-launch-profile",
+        "--urls",
+        "http://localhost:5177"
+      ],
+      "port": 5177
     }
   ]
 }

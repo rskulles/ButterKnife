@@ -12,7 +12,17 @@ public interface IConversationStore
     /// <summary>Most recently updated first.</summary>
     Task<IReadOnlyList<ConversationSummary>> ListAsync(CancellationToken cancellationToken = default);
 
-    Task AppendMessageAsync(Guid conversationId, ChatMessage message, CancellationToken cancellationToken = default);
+    /// <summary>Returns the new message's id.</summary>
+    Task<long> AppendMessageAsync(Guid conversationId, ChatMessage message, CancellationToken cancellationToken = default);
+
+    /// <summary>Removes one message (and its images).</summary>
+    Task DeleteMessageAsync(Guid conversationId, long messageId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes the message and everything after it, for edit-and-resend and regenerate. A compaction summary that
+    /// covered removed messages is cleared, and the stored context usage is reset since it no longer applies.
+    /// </summary>
+    Task DeleteMessagesFromAsync(Guid conversationId, long messageId, CancellationToken cancellationToken = default);
 
     Task SetModelAsync(Guid conversationId, Guid connectionId, string model, CancellationToken cancellationToken = default);
 

@@ -38,8 +38,8 @@ public sealed class SqliteConversationStoreTests : IDisposable
         Assert.Equal(ConnA, loaded.ConnectionId);
         Assert.Equal("llama3", loaded.Model);
         Assert.Equal(
-            [new ChatMessage(ChatRole.User, "hi"), new ChatMessage(ChatRole.Assistant, "hello **you**")],
-            loaded.Messages);
+            [(ChatRole.User, "hi"), (ChatRole.Assistant, "hello **you**")],
+            loaded.Messages.Select(m => (m.Role, m.Content)));
         Assert.True(loaded.UpdatedAt >= loaded.CreatedAt);
     }
 
@@ -204,6 +204,56 @@ public sealed class SqliteConversationStoreTests : IDisposable
     public async Task GetMissingReturnsNull()
     {
         Assert.Null(await _store.GetAsync(Guid.NewGuid(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task MessagesCarryIdsAndTimestamps_DeleteFromTruncates_AndClearsAStaleSummary()
+    {
+        var conv = await _store.CreateAsync("t", Guid.NewGuid(), "m", null, CancellationToken.None);
+        var ids = new List<long>();
+        foreach (var (role, text) in new[] { (ChatRole.User, "a"), (ChatRole.Assistant, "b"), (ChatRole.User, "c"), (ChatRole.Assistant, "d") })
+        {
+            ids.Add(await _store.AppendMessageAsync(conv.Id, new ChatMessage(role, text), CancellationToken.None));
+        }
+        await _store.SetSummaryAsync(conv.Id, "summary of a+b", 2, CancellationToken.None);
+        await _store.SetContextUsageAsync(conv.Id, 500, 8000, CancellationToken.None);
+
+        var loaded = (await _store.GetAsync(conv.Id, CancellationToken.None))!;
+        Assert.Equal(ids, loaded.Messages.Select(m => m.Id!.Value));
+        Assert.All(loaded.Messages, m => Assert.NotNull(m.CreatedAt));
+        Assert.True(ids[0] < ids[1] && ids[1] < ids[2] && ids[2] < ids[3]);
+
+        // Regenerate-style truncation from "c": summary still covers a+b, so it survives; context usage resets.
+        await _store.DeleteMessagesFromAsync(conv.Id, ids[2], CancellationToken.None);
+        loaded = (await _store.GetAsync(conv.Id, CancellationToken.None))!;
+        Assert.Equal(["a", "b"], loaded.Messages.Select(m => m.Content));
+        Assert.Equal("summary of a+b", loaded.Summary);
+        Assert.Null(loaded.ContextTokens);
+
+        // Edit-style truncation from "b": the summary claimed two messages and only one remains, so it is cleared.
+        await _store.DeleteMessagesFromAsync(conv.Id, ids[1], CancellationToken.None);
+        loaded = (await _store.GetAsync(conv.Id, CancellationToken.None))!;
+        Assert.Equal(["a"], loaded.Messages.Select(m => m.Content));
+        Assert.Null(loaded.Summary);
+        Assert.Null(loaded.SummaryThrough);
+    }
+
+    [Fact]
+    public async Task DeleteMessageRemovesOnlyThatMessageAndItsImages()
+    {
+        var conv = await _store.CreateAsync("t", Guid.NewGuid(), "m", null, CancellationToken.None);
+        var first = await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.User, "look", [new ChatImage("image/png", [1, 2])]), CancellationToken.None);
+        var second = await _store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.Assistant, "nice"), CancellationToken.None);
+
+        await _store.DeleteMessageAsync(conv.Id, first, CancellationToken.None);
+
+        var loaded = (await _store.GetAsync(conv.Id, CancellationToken.None))!;
+        Assert.Equal([second], loaded.Messages.Select(m => m.Id!.Value));
+        await using var connection = new SqliteConnection($"Data Source={Path.Combine(_dir, "nested", "test.db")}");
+        await connection.OpenAsync(CancellationToken.None);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM message_images;";
+        Assert.Equal(0L, await cmd.ExecuteScalarAsync(CancellationToken.None));
     }
 
     public void Dispose()

@@ -26,6 +26,12 @@ public sealed record ChatMessage(ChatRole Role, string Content, IReadOnlyList<Ch
 {
     public static readonly IReadOnlyList<ChatImage> NoImages = Array.Empty<ChatImage>();
 
+    /// <summary>Row id when the message came from the store; null for messages built for a request.</summary>
+    public long? Id { get; init; }
+
+    /// <summary>When the message was stored; null for messages built for a request.</summary>
+    public DateTimeOffset? CreatedAt { get; init; }
+
     public IReadOnlyList<ChatImage> Images { get; init; } = Images ?? NoImages;
 
     public bool HasImages => Images.Count > 0;

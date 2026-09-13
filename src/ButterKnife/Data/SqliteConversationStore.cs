@@ -72,7 +72,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         return list;
     }
 
-    public async Task AppendMessageAsync(Guid conversationId, ChatMessage message, CancellationToken cancellationToken = default)
+    public async Task<long> AppendMessageAsync(Guid conversationId, ChatMessage message, CancellationToken cancellationToken = default)
     {
         var now = SqliteDatabase.Format(DateTimeOffset.UtcNow);
 
@@ -121,6 +121,50 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         }
 
         await tx.CommitAsync(cancellationToken);
+        return messageId;
+    }
+
+    public async Task DeleteMessageAsync(Guid conversationId, long messageId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await db.OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM messages WHERE conversation_id = $cid AND id = $mid;
+            UPDATE conversations SET updated_at = $now, context_tokens = NULL WHERE id = $cid;
+            """;
+        cmd.Parameters.AddWithValue("$cid", conversationId.ToString("D"));
+        cmd.Parameters.AddWithValue("$mid", messageId);
+        cmd.Parameters.AddWithValue("$now", SqliteDatabase.Format(DateTimeOffset.UtcNow));
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+        await InvalidateSummaryIfShortAsync(connection, conversationId, cancellationToken);
+    }
+
+    public async Task DeleteMessagesFromAsync(Guid conversationId, long messageId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await db.OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM messages WHERE conversation_id = $cid AND id >= $mid;
+            UPDATE conversations SET updated_at = $now, context_tokens = NULL WHERE id = $cid;
+            """;
+        cmd.Parameters.AddWithValue("$cid", conversationId.ToString("D"));
+        cmd.Parameters.AddWithValue("$mid", messageId);
+        cmd.Parameters.AddWithValue("$now", SqliteDatabase.Format(DateTimeOffset.UtcNow));
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+        await InvalidateSummaryIfShortAsync(connection, conversationId, cancellationToken);
+    }
+
+    /// <summary>A summary claims to cover the first N messages; if fewer than N remain it no longer describes the transcript.</summary>
+    private static async Task InvalidateSummaryIfShortAsync(SqliteConnection connection, Guid conversationId, CancellationToken cancellationToken)
+    {
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE conversations SET summary = NULL, summary_through = NULL
+            WHERE id = $cid AND summary_through IS NOT NULL
+              AND summary_through > (SELECT COUNT(*) FROM messages WHERE conversation_id = $cid);
+            """;
+        cmd.Parameters.AddWithValue("$cid", conversationId.ToString("D"));
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task SetModelAsync(Guid conversationId, Guid connectionId, string model, CancellationToken cancellationToken = default)
@@ -226,7 +270,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         }
 
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT id, role, content FROM messages WHERE conversation_id = $cid ORDER BY id;";
+        cmd.CommandText = "SELECT id, role, content, created_at FROM messages WHERE conversation_id = $cid ORDER BY id;";
         cmd.Parameters.AddWithValue("$cid", id.ToString("D"));
 
         var messages = new List<ChatMessage>();
@@ -237,7 +281,11 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
             messages.Add(new ChatMessage(
                 Enum.Parse<ChatRole>(reader.GetString(1)),
                 reader.GetString(2),
-                images.TryGetValue(messageId, out var list) ? list : null));
+                images.TryGetValue(messageId, out var list) ? list : null)
+            {
+                Id = messageId,
+                CreatedAt = SqliteDatabase.Parse(reader.GetString(3)),
+            });
         }
         return messages;
     }

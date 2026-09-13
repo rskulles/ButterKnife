@@ -48,6 +48,23 @@
     clip-path: polygon(0 0, 100% 0, 100% 100%);
 }
 
+/* Per-message actions: quiet until the entry is hovered or focused; always visible where there is no hover (touch). */
+.msg-actions {
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.msg:hover .msg-actions,
+.msg:focus-within .msg-actions {
+    opacity: 1;
+}
+
+@media (hover: none) {
+    .msg-actions {
+        opacity: 1;
+    }
+}
+
 .msg-image {
     max-height: 12rem;
     cursor: zoom-in;

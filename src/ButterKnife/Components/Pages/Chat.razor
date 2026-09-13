@@ -107,6 +107,29 @@
                              title="@ButterKnifeThrobber.StatsTooltip">@ButterKnifeThrobber.FormatStats(turn.GetStats())</div>
                     }
                 }
+                else if (_editing == turn)
+                {
+                    <div class="msg-bubble ms-auto p-2 rounded-3 bg-primary-subtle w-100" style="min-width: min(32rem, 100%)">
+                        @if (turn.Images.Count > 0)
+                        {
+                            <div class="d-flex flex-wrap gap-2 mb-2">
+                                @foreach (var image in turn.Images)
+                                {
+                                    <img src="@image.DataUrl" alt="Attached image" class="rounded d-block msg-image"/>
+                                }
+                            </div>
+                        }
+                        <textarea class="form-control" rows="4" @bind="_editText" @bind:event="oninput" aria-label="Edit message"></textarea>
+                        <div class="d-flex justify-content-end gap-2 mt-2">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelEdit">Cancel</button>
+                            <button type="button" class="btn btn-sm btn-primary" @onclick="SaveEditAsync"
+                                    disabled="@(string.IsNullOrWhiteSpace(_editText) && turn.Images.Count == 0)">
+                                Save &amp; send
+                            </button>
+                        </div>
+                        <div class="form-text text-end">Everything after this message will be replaced by the new reply.</div>
+                    </div>
+                }
                 else
                 {
                     <div class="msg-bubble ms-auto px-3 py-2 rounded-3 bg-primary-subtle prewrap text-break">
@@ -122,6 +145,25 @@
                             </div>
                         }
                         @turn.Text
+                    </div>
+                }
+                @if (!turn.IsStreaming && turn.MessageId is not null && _editing != turn)
+                {
+                    <div class="msg-actions d-flex gap-1 @(turn.Role == ChatRole.User ? "justify-content-end" : "")">
+                        @if (turn.Role == ChatRole.User)
+                        {
+                            <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Edit and resend"
+                                    aria-label="Edit and resend" @onclick="() => BeginEdit(turn)" disabled="@_isStreaming">
+                                <i class="bi bi-pencil" aria-hidden="true"></i>
+                            </button>
+                        }
+                        @if (turn.Role == ChatRole.Assistant && turn == _turns[^1])
+                        {
+                            <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Regenerate this reply"
+                                    aria-label="Regenerate this reply" @onclick="RegenerateAsync" disabled="@(_isStreaming || Selected is null)">
+                                <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+                            </button>
+                        }
                     </div>
                 }
             </div>
@@ -325,6 +367,10 @@
     private CancellationTokenSource? _generation;
     private readonly CancellationTokenSource _disposed = new();
 
+    /// <summary>The user turn being edited in place, if any, and its draft text.</summary>
+    private ChatTurn? _editing;
+    private string _editText = "";
+
     private ElementReference _messagesElement;
     private ElementReference _inputElement;
 
@@ -457,7 +503,7 @@
         _contextWindow = conversation.ContextWindow;
         foreach (var message in conversation.Messages)
         {
-            _turns.Add(new ChatTurn(message.Role, message.Content, Markdown, message.Images));
+            _turns.Add(new ChatTurn(message.Role, message.Content, Markdown, message.Images) { MessageId = message.Id, CreatedAt = message.CreatedAt });
         }
 
         // The saved model is selected even before the model list has arrived; ReconcileSelection (now, or when the
@@ -597,30 +643,45 @@
         _input = "";
         _pendingImages.Clear();
         _imageError = null;
+
+        if (!await SendMessageAsync(model, prompt, images))
+        {
+            _input = prompt; // could not save: give the draft back
+            _pendingImages.AddRange(images);
+        }
+    }
+
+    /// <summary>Stores a user message, adds it to the transcript, and streams the reply. False if the message could not be saved.</summary>
+    private async Task<bool> SendMessageAsync(ModelDescriptor model, string prompt, ChatImage[] images)
+    {
         _error = null;
         _contextTokens = null; // exact again once the backend reports usage for this request
 
         Guid conversationId;
+        long messageId;
         try
         {
             conversationId = await EnsureConversationAsync(model, prompt.Length > 0 ? prompt : $"Image ({images.Length})");
-            await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.User, prompt, images), _disposed.Token);
+            messageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.User, prompt, images), _disposed.Token);
         }
         catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
         {
-            return;
+            return true;
         }
         catch (Exception ex)
         {
             _error = $"Could not save the message: {ex.Message}";
-            _input = prompt;
-            _pendingImages.AddRange(images);
-            return;
+            return false;
         }
 
-        _turns.Add(new ChatTurn(ChatRole.User, prompt, Markdown, images));
-        var history = BuildHistory();
+        _turns.Add(new ChatTurn(ChatRole.User, prompt, Markdown, images) { MessageId = messageId, CreatedAt = DateTimeOffset.Now });
+        await StreamReplyAsync(conversationId, model, BuildHistory());
+        return true;
+    }
 
+    /// <summary>Adds a streaming assistant turn, runs the request, persists the outcome and refreshes the context meter.</summary>
+    private async Task StreamReplyAsync(Guid conversationId, ModelDescriptor model, List<ChatMessage> history)
+    {
         var reply = new ChatTurn(ChatRole.Assistant, "", Markdown) { IsStreaming = true };
         _turns.Add(reply);
 
@@ -671,7 +732,7 @@
             completedText = reply.Text; // keep whatever streamed before Stop / disconnect
             if (_disposed.IsCancellationRequested)
             {
-                await PersistReplyAsync(conversationId, completedText);
+                await PersistReplyAsync(conversationId, reply, completedText);
                 return; // circuit is gone; nothing to render
             }
 
@@ -693,7 +754,7 @@
             _generation = null;
         }
 
-        await PersistReplyAsync(conversationId, completedText);
+        await PersistReplyAsync(conversationId, reply, completedText);
         await RenderAndScrollAsync();
         if (_js is not null)
         {
@@ -701,6 +762,88 @@
         }
 
         await AfterReplyContextAsync(conversationId, model);
+    }
+
+    // ---- editing and regenerating ----
+
+    private void BeginEdit(ChatTurn turn)
+    {
+        _editing = turn;
+        _editText = turn.Text;
+    }
+
+    private void CancelEdit()
+    {
+        _editing = null;
+        _editText = "";
+    }
+
+    /// <summary>Replaces the edited message and everything after it, then asks for a fresh reply.</summary>
+    private async Task SaveEditAsync()
+    {
+        if (_editing is not { MessageId: { } messageId } turn || _isStreaming || Selected is not { } model || _conversationId is not { } conversationId)
+        {
+            return;
+        }
+
+        var text = _editText.Trim();
+        var images = turn.Images.ToArray();
+        CancelEdit();
+
+        if (!await TruncateFromAsync(conversationId, turn, messageId))
+        {
+            return;
+        }
+        await SendMessageAsync(model, text, images);
+    }
+
+    /// <summary>Drops the last reply and asks the model again with the same history.</summary>
+    private async Task RegenerateAsync()
+    {
+        if (_isStreaming || Selected is not { } model || _conversationId is not { } conversationId
+            || _turns.Count == 0 || _turns[^1] is not { Role: ChatRole.Assistant, MessageId: { } messageId } last)
+        {
+            return;
+        }
+
+        if (!await TruncateFromAsync(conversationId, last, messageId))
+        {
+            return;
+        }
+        _error = null;
+        _contextTokens = null;
+        await StreamReplyAsync(conversationId, model, BuildHistory());
+    }
+
+    /// <summary>Removes a turn and everything after it from the store and the transcript; the compaction checkpoint follows the store's rule.</summary>
+    private async Task<bool> TruncateFromAsync(Guid conversationId, ChatTurn turn, long messageId)
+    {
+        try
+        {
+            await Store.DeleteMessagesFromAsync(conversationId, messageId, _disposed.Token);
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not change the conversation: {ex.Message}";
+            return false;
+        }
+
+        var index = _turns.IndexOf(turn);
+        if (index >= 0)
+        {
+            _turns.RemoveRange(index, _turns.Count - index);
+        }
+        if (_summaryThrough > _turns.Count)
+        {
+            _summary = null;
+            _summaryThrough = 0;
+        }
+        Events.NotifyChanged();
+        return true;
     }
 
     /// <summary>Creates the conversation on first send and moves the URL to it; keeps the stored model in sync afterward.</summary>
@@ -748,7 +891,7 @@
         }
     }
 
-    private async Task PersistReplyAsync(Guid conversationId, string? text)
+    private async Task PersistReplyAsync(Guid conversationId, ChatTurn reply, string? text)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -757,7 +900,8 @@
 
         try
         {
-            await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.Assistant, text), CancellationToken.None);
+            reply.MessageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.Assistant, text), CancellationToken.None);
+            reply.CreatedAt = DateTimeOffset.Now;
             Events.NotifyChanged();
         }
         catch (Exception ex)
@@ -1300,6 +1444,11 @@
 
         public ChatRole Role { get; } = role;
         public IReadOnlyList<ChatImage> Images { get; } = images ?? ChatMessage.NoImages;
+
+        /// <summary>Row id once stored; null while a reply is streaming or if saving failed. Actions need it.</summary>
+        public long? MessageId { get; set; }
+
+        public DateTimeOffset? CreatedAt { get; set; }
         public string Text => _text.ToString();
 
         /// <summary>Streamed chunks; a close stand-in for tokens until the backend reports real counts.</summary>
