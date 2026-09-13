@@ -1,0 +1,143 @@
+@* Data section: where the database lives, a backup download and a restore. The backup is a plain link to the
+   /backup endpoint (Program.cs) so the browser streams the file itself; a restore uploads a .db over the circuit,
+   is confirmed first, and replaces the database in place (SqliteDatabase.RestoreFromAsync). *@
+@inject SqliteDatabase Database
+@inject ConversationEvents ConversationEvents
+@inject ConnectionEvents ConnectionEvents
+@inject SettingsEvents SettingsEvents
+
+<h1 class="h4">Data</h1>
+<p class="text-muted">Everything ButterKnife knows is in one file: chats, images, personas, connections and settings.</p>
+
+<div class="row">
+    <div class="col-lg-7">
+        @if (Database.DataSourcePath is not { } path)
+        {
+            <p>This ButterKnife runs on an in-memory database, so there is nothing to back up.</p>
+        }
+        else
+        {
+            <dl class="row small mb-4">
+                <dt class="col-sm-3">Database</dt>
+                <dd class="col-sm-9"><code class="user-select-all text-break">@path</code> <span class="text-body-secondary">(@FileSize(path))</span></dd>
+            </dl>
+
+            <h2 class="h6">Backup</h2>
+            <a class="btn btn-primary" href="backup" download="@BackupFileName" data-enhance-nav="false">
+                <i class="bi bi-download me-1" aria-hidden="true"></i>Download a backup
+            </a>
+            <div class="form-text mb-4">
+                A snapshot of the database as one file. Keep it somewhere safe and restore it here or on another computer.
+                API keys are encrypted for this installation, so after a restore on another computer they need entering again.
+            </div>
+
+            <h2 class="h6">Restore</h2>
+            <InputFile OnChange="OnPicked" accept=".db,.sqlite,.sqlite3" class="form-control" disabled="@_busy" aria-label="Backup file to restore" />
+            <div class="form-text">Pick a backup made by ButterKnife. You will be asked to confirm before anything changes.</div>
+
+            @if (_picked is { } picked)
+            {
+                <div class="alert alert-warning mt-3" role="alertdialog" aria-label="Replace everything?">
+                    <strong>Replace everything?</strong> Restoring <em>@picked.Name</em> replaces every chat, connection, persona and
+                    setting with what the backup holds. This cannot be undone; download a backup first if you are not sure.
+                    <div class="mt-2 d-flex gap-2">
+                        <button type="button" class="btn btn-danger" @onclick="RestoreAsync" disabled="@_busy">
+                            @if (_busy)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                            }
+                            Restore this backup
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" @onclick="() => _picked = null" disabled="@_busy">Cancel</button>
+                    </div>
+                </div>
+            }
+
+            @if (_message is not null)
+            {
+                <div class="mt-3 @(_ok ? "text-success" : "text-danger")" role="status">@_message</div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>Generous: image-heavy databases are big, and the upload is streamed rather than buffered.</summary>
+    private const long MaxRestoreBytes = 8L * 1024 * 1024 * 1024;
+
+    private IBrowserFile? _picked;
+    private bool _busy;
+    private string? _message;
+    private bool _ok;
+
+    private static string BackupFileName => $"ButterKnife-backup-{DateTime.Now:yyyy-MM-dd}.db";
+
+    private void OnPicked(InputFileChangeEventArgs e)
+    {
+        _picked = e.FileCount > 0 ? e.File : null;
+        _message = null;
+    }
+
+    private async Task RestoreAsync()
+    {
+        if (_picked is not { } picked || _busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _message = null;
+        var upload = Path.Combine(Path.GetTempPath(), $"butterknife-restore-{Guid.NewGuid():N}.db");
+        try
+        {
+            await using (var input = picked.OpenReadStream(MaxRestoreBytes))
+            await using (var output = File.Create(upload))
+            {
+                await input.CopyToAsync(output);
+            }
+
+            await Database.RestoreFromAsync(upload, CancellationToken.None);
+            ConversationEvents.NotifyChanged();
+            ConnectionEvents.NotifyChanged();
+            SettingsEvents.NotifyChanged();
+            _ok = true;
+            _message = $"Restored {picked.Name}. Chats, connections and settings now come from the backup; reload any other open tabs.";
+            _picked = null;
+        }
+        catch (Exception ex)
+        {
+            _ok = false;
+            _message = $"Not restored: {ex.Message}";
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(upload);
+            }
+            catch (IOException)
+            {
+                // A stray temp file is harmless.
+            }
+            _busy = false;
+        }
+    }
+
+    private static string FileSize(string path)
+    {
+        try
+        {
+            var bytes = new FileInfo(path).Length;
+            return bytes switch
+            {
+                < 1024 * 1024 => $"{bytes / 1024.0:0} KB",
+                < 1024L * 1024 * 1024 => $"{bytes / (1024.0 * 1024):0.0} MB",
+                _ => $"{bytes / (1024.0 * 1024 * 1024):0.00} GB",
+            };
+        }
+        catch (IOException)
+        {
+            return "size unknown";
+        }
+    }
+}

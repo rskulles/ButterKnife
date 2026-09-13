@@ -33,6 +33,84 @@ public sealed class SqliteDatabase
         }
 
         _connectionString = builder.ToString();
+        DataSourcePath = string.Equals(builder.DataSource, ":memory:", StringComparison.OrdinalIgnoreCase) ? null : builder.DataSource;
+    }
+
+    /// <summary>Absolute path of the database file, or null for an in-memory database.</summary>
+    public string? DataSourcePath { get; }
+
+    /// <summary>Writes a consistent snapshot of the database to <paramref name="path"/> (VACUUM INTO), replacing any file there.</summary>
+    public async Task BackupToAsync(string path, CancellationToken cancellationToken)
+    {
+        File.Delete(path); // VACUUM INTO refuses to overwrite
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "VACUUM INTO $path;";
+        cmd.Parameters.AddWithValue("$path", path);
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Replaces the database file with the one at <paramref name="path"/> after checking that it is an SQLite file,
+    /// passes SQLite's quick check and holds ButterKnife's tables. Pooled connections are dropped and the schema is
+    /// re-checked on the next open, so a backup from an older version gets its missing columns added. An operation
+    /// running in another circuit at that instant may fail once; callers should tell the user to reload.
+    /// </summary>
+    public async Task RestoreFromAsync(string path, CancellationToken cancellationToken)
+    {
+        var target = DataSourcePath ?? throw new InvalidOperationException("An in-memory database cannot be restored.");
+        await ValidateBackupAsync(path, cancellationToken);
+
+        await _initLock.WaitAsync(cancellationToken);
+        try
+        {
+            SqliteConnection.ClearAllPools();
+            foreach (var suffix in new[] { "", "-wal", "-shm", "-journal" })
+            {
+                File.Delete(target + suffix);
+            }
+            File.Copy(path, target);
+            _initialized = false;
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    private static async Task ValidateBackupAsync(string path, CancellationToken cancellationToken)
+    {
+        var header = new byte[16];
+        await using (var file = File.OpenRead(path))
+        {
+            if (await file.ReadAsync(header, cancellationToken) < header.Length
+                || System.Text.Encoding.ASCII.GetString(header, 0, 15) != "SQLite format 3")
+            {
+                throw new InvalidDataException("That file is not an SQLite database.");
+            }
+        }
+
+        var readOnly = new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString();
+        await using var connection = new SqliteConnection(readOnly);
+        await connection.OpenAsync(cancellationToken);
+
+        await using (var check = connection.CreateCommand())
+        {
+            check.CommandText = "PRAGMA quick_check;";
+            if (await check.ExecuteScalarAsync(cancellationToken) is not string result || result != "ok")
+            {
+                throw new InvalidDataException("That database is damaged and cannot be restored.");
+            }
+        }
+
+        await using (var tables = connection.CreateCommand())
+        {
+            tables.CommandText = "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('conversations', 'messages', 'connections');";
+            if (Convert.ToInt64(await tables.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture) != 3)
+            {
+                throw new InvalidDataException("That database was not made by ButterKnife.");
+            }
+        }
     }
 
     public async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)

@@ -39,6 +39,22 @@ app.UseHttpsRedirection();
 app.UseAntiforgery();
 
 app.MapStaticAssets(DesktopLauncher.StaticAssetsManifestPath);
+
+// Settings → Data → "Download a backup": a consistent snapshot of the database, streamed as a file and deleted
+// once sent. A plain GET so the browser handles the download itself (no circuit round trip for a large file).
+app.MapGet("/backup", async (SqliteDatabase database, CancellationToken cancellationToken) =>
+{
+    if (database.DataSourcePath is null)
+    {
+        return Results.NotFound();
+    }
+
+    var snapshot = Path.Combine(Path.GetTempPath(), $"butterknife-backup-{Guid.NewGuid():N}.db");
+    await database.BackupToAsync(snapshot, cancellationToken);
+    var stream = new FileStream(snapshot, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16, FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+    return Results.File(stream, "application/vnd.sqlite3", $"ButterKnife-backup-{DateTime.Now:yyyy-MM-dd}.db");
+});
+
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
