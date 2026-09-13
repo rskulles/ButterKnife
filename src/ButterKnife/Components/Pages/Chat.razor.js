@@ -94,6 +94,75 @@ export function takeDroppedImage() {
     return droppedImages.shift() ?? new Uint8Array(0);
 }
 
+// ---- Math and diagrams --------------------------------------------------------------------------
+// Markdig marks TeX as <span class="math">\(..\)</span> / <div class="math">\[..\]</div> and ```mermaid fences as
+// <div class="mermaid">. KaTeX and Mermaid are vendored but heavy, so each is loaded the first time a transcript needs
+// it. Both run only after a transcript settles (same hook as the code blocks), never mid-stream.
+const vendored = {};
+function loadOnce(key, src, css) {
+    if (!vendored[key]) {
+        vendored[key] = new Promise((resolve, reject) => {
+            if (css) {
+                const link = document.createElement("link");
+                link.rel = "stylesheet";
+                link.href = css;
+                document.head.appendChild(link);
+            }
+            const script = document.createElement("script");
+            script.src = src;
+            script.onload = resolve;
+            script.onerror = () => reject(new Error(`failed to load ${src}`));
+            document.head.appendChild(script);
+        });
+    }
+    return vendored[key];
+}
+
+async function renderMath(root) {
+    if (!root.querySelector(".math")) {
+        return;
+    }
+    await loadOnce("katex", "lib/katex/katex.min.js", "lib/katex/katex.min.css");
+    await loadOnce("katex-auto", "lib/katex/contrib/auto-render.min.js");
+    for (const el of root.querySelectorAll(".math:not([data-rendered])")) {
+        el.dataset.rendered = "1";
+        window.renderMathInElement(el, {
+            delimiters: [
+                { left: "\\[", right: "\\]", display: true },
+                { left: "\\(", right: "\\)", display: false },
+                { left: "$$", right: "$$", display: true },
+            ],
+            throwOnError: false,
+        });
+    }
+}
+
+async function renderDiagrams(root) {
+    const nodes = [...root.querySelectorAll(".mermaid:not([data-processed])")];
+    if (nodes.length === 0) {
+        return;
+    }
+    await loadOnce("mermaid", "lib/mermaid/mermaid.min.js");
+    const dark = document.documentElement.getAttribute("data-bs-theme") === "dark";
+    window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default" });
+    for (const node of nodes) {
+        node.dataset.source = node.dataset.source ?? node.textContent;
+        try {
+            await window.mermaid.run({ nodes: [node] });
+        } catch {
+            node.dataset.processed = "error"; // leave the source text visible
+        }
+    }
+}
+
+export async function enhanceMathAndDiagrams(root) {
+    if (!root) {
+        return;
+    }
+    try { await renderMath(root); } catch (e) { console.warn("math rendering failed", e); }
+    try { await renderDiagrams(root); } catch (e) { console.warn("diagram rendering failed", e); }
+}
+
 // Code blocks in rendered replies: syntax highlighting (highlight.js, loaded in App.razor) and a copy button.
 // Called from .NET once a transcript settles (load, reply finished); already-enhanced blocks are skipped, and a
 // block Blazor re-renders comes back without the marker, so it is enhanced again.
@@ -101,7 +170,7 @@ export function enhanceCodeBlocks(root) {
     if (!root) {
         return;
     }
-    for (const pre of root.querySelectorAll(".msg-markdown pre")) {
+    for (const pre of root.querySelectorAll(".msg-markdown pre:not(.mermaid)")) {
         if (pre.dataset.enhanced === "1") {
             continue;
         }

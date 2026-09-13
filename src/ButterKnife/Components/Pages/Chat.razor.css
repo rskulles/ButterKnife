@@ -132,6 +132,17 @@
     transition: stroke-dashoffset 0.4s ease;
 }
 
+/* Mermaid diagrams and display math inside replies stay within the bubble. */
+.msg-markdown ::deep .mermaid svg {
+    max-width: 100%;
+    height: auto;
+}
+
+.msg-markdown ::deep .katex-display {
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
 /* Rendered markdown inside replies (Markdig adds Bootstrap classes to tables/quotes/images; code blocks need these). */
 .msg-markdown ::deep > :last-child {
     margin-bottom: 0;

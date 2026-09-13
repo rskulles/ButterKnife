@@ -27,6 +27,42 @@
         "highlight.min.js",
         "styles/atom-one-dark.min.css"
       ]
+    },
+    {
+      "library": "mermaid@11.12.0",
+      "destination": "wwwroot/lib/mermaid",
+      "files": [
+        "mermaid.min.js"
+      ]
+    },
+    {
+      "library": "KaTeX@0.18.6",
+      "destination": "wwwroot/lib/katex",
+      "files": [
+        "katex.min.js",
+        "katex.min.css",
+        "contrib/auto-render.min.js",
+        "fonts/KaTeX_AMS-Regular.woff2",
+        "fonts/KaTeX_Caligraphic-Bold.woff2",
+        "fonts/KaTeX_Caligraphic-Regular.woff2",
+        "fonts/KaTeX_Fraktur-Bold.woff2",
+        "fonts/KaTeX_Fraktur-Regular.woff2",
+        "fonts/KaTeX_Main-Bold.woff2",
+        "fonts/KaTeX_Main-BoldItalic.woff2",
+        "fonts/KaTeX_Main-Italic.woff2",
+        "fonts/KaTeX_Main-Regular.woff2",
+        "fonts/KaTeX_Math-BoldItalic.woff2",
+        "fonts/KaTeX_Math-Italic.woff2",
+        "fonts/KaTeX_SansSerif-Bold.woff2",
+        "fonts/KaTeX_SansSerif-Italic.woff2",
+        "fonts/KaTeX_SansSerif-Regular.woff2",
+        "fonts/KaTeX_Script-Regular.woff2",
+        "fonts/KaTeX_Size1-Regular.woff2",
+        "fonts/KaTeX_Size2-Regular.woff2",
+        "fonts/KaTeX_Size3-Regular.woff2",
+        "fonts/KaTeX_Size4-Regular.woff2",
+        "fonts/KaTeX_Typewriter-Regular.woff2"
+      ]
     }
   ]
 }

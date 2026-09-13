@@ -36,6 +36,17 @@ def hi():
 | 1     | 2     |
 
 > a quote
+
+Inline math $E = mc^2$ and a display equation:
+
+$$
+\\int_0^1 x^2\\,dx = \\frac{1}{3}
+$$
+
+```mermaid
+graph LR
+  A[Prompt] --> B(Model) --> C{Reply}
+```
 """
 import re
 DELAY = 0.08

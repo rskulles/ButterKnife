@@ -38,6 +38,18 @@ public class MarkdownRendererTests
     }
 
     [Fact]
+    public void MarksMathAndMermaidForClientSideRendering()
+    {
+        var html = _renderer.ToHtml("Inline $E = mc^2$ here.\n\n$$\nx^2\n$$\n\n```mermaid\ngraph LR\n  A --> B <script>x</script>\n```\n");
+
+        Assert.Contains("<span class=\"math\">\\(E = mc^2\\)</span>", html);
+        Assert.Contains("<div class=\"math\">", html);
+        Assert.Contains("<pre class=\"mermaid\">graph LR", html);
+        Assert.Contains("A --> B", html);            // diagram source stays text for Mermaid to render in the browser...
+        Assert.Contains("&lt;script>x&lt;/script>", html); // ...with tags escaped, so a model cannot inject markup through a diagram
+    }
+
+    [Fact]
     public void EmptyInputRendersEmpty()
     {
         Assert.Equal(string.Empty, _renderer.ToHtml(""));

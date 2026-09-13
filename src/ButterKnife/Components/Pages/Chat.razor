@@ -611,6 +611,7 @@
             try
             {
                 await _js.InvokeVoidAsync("enhanceCodeBlocks", _messagesElement);
+                await _js.InvokeVoidAsync("enhanceMathAndDiagrams", _messagesElement);
             }
             catch (JSDisconnectedException)
             {
