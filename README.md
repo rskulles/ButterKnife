@@ -33,8 +33,8 @@ image attachments, dictates prompts through a local Whisper server, and keeps ev
 Grab the build for your machine from the [Releases page](https://github.com/rskulles/ButterKnife/releases). Nothing else
 to install: the .NET runtime is inside.
 
-- **Windows**: unzip, run `ButterKnife.exe`. It has no window of its own: a butter knife appears in the system tray
-  with *Open ButterKnife*, *Copy address for phone* and *Quit*. The executable is code-signed; if SmartScreen still
+- **Windows**: unzip, run `ButterKnife.exe`. It has no window of its own: a butter knife appears in the system tray.
+  Click it to open ButterKnife; right-click for *Open ButterKnife*, *Copy address for phone* and *Quit*. The executable is code-signed; if SmartScreen still
   shows "Windows protected your PC" while the certificate is new, click *More info* then *Run anyway*. Its database,
   keys and log live in a `data` folder next to the executable, so the folder can be moved or backed up as one.
 - **macOS**: open the `.dmg` for Apple Silicon (`osx-arm64`) or Intel (`osx-x64`) and drag ButterKnife to

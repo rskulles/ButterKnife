@@ -13,10 +13,22 @@ public static class WindowsTray
 {
     public static void Run(WebApplication app)
     {
-        var context = new TrayContext(app);
-        Application.EnableVisualStyles();
-        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
-        Application.Run(context);
+        // The entry point is a plain Main (no [STAThread]), but the clipboard and context menus need a
+        // single-threaded-apartment thread with a Windows Forms message loop, so the tray gets its own.
+        var ui = new Thread(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
+            Application.EnableVisualStyles();
+            Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+            Application.Run(new TrayContext(app));
+        })
+        {
+            Name = "ButterKnife tray",
+            IsBackground = false,
+        };
+        ui.SetApartmentState(ApartmentState.STA);
+        ui.Start();
+        ui.Join();
     }
 
     private sealed class TrayContext : ApplicationContext
@@ -31,9 +43,9 @@ public static class WindowsTray
         {
             _app = app;
 
-            _copy = new ToolStripMenuItem("Copy address for phone", null, (_, _) => Clipboard.SetText(_lanUrl ?? _localUrl)) { Enabled = false };
+            _copy = new ToolStripMenuItem("Copy address for phone", null, (_, _) => Guarded(CopyAddress)) { Enabled = false };
             var menu = new ContextMenuStrip();
-            menu.Items.Add(new ToolStripMenuItem("Open ButterKnife", null, (_, _) => DesktopLauncher.OpenBrowser(_localUrl)) { Font = new Font(menu.Font, FontStyle.Bold) });
+            menu.Items.Add(new ToolStripMenuItem("Open ButterKnife", null, (_, _) => Guarded(() => DesktopLauncher.OpenBrowser(_localUrl))) { Font = new Font(menu.Font, FontStyle.Bold) });
             menu.Items.Add(_copy);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(new ToolStripMenuItem("Quit ButterKnife", null, (_, _) => _app.Lifetime.StopApplication()));
@@ -42,10 +54,17 @@ public static class WindowsTray
             {
                 Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!) ?? SystemIcons.Application,
                 Text = "ButterKnife (starting…)",
-                ContextMenuStrip = menu,
+                ContextMenuStrip = menu, // right-click; NotifyIcon handles focus so the menu closes when clicking away
                 Visible = true,
             };
-            _icon.DoubleClick += (_, _) => DesktopLauncher.OpenBrowser(_localUrl);
+            // Left click opens the app; right click is the menu.
+            _icon.MouseClick += (_, e) =>
+            {
+                if (e.Button == MouseButtons.Left)
+                {
+                    Guarded(() => DesktopLauncher.OpenBrowser(_localUrl));
+                }
+            };
 
             var ui = SynchronizationContext.Current!;
             _app.Lifetime.ApplicationStarted.Register(() => ui.Post(_ => OnStarted(), null));
@@ -66,6 +85,26 @@ public static class WindowsTray
                     }, null);
                 }
             });
+        }
+
+        private void CopyAddress()
+        {
+            var text = _lanUrl ?? _localUrl;
+            Clipboard.SetText(text);
+            _icon.ShowBalloonTip(3000, "Copied", $"{text}\nOpen this on a phone on the same Wi-Fi.", ToolTipIcon.Info);
+        }
+
+        /// <summary>Menu actions must never take the tray down; report problems as a notification instead.</summary>
+        private void Guarded(Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                _icon.ShowBalloonTip(5000, "ButterKnife", ex.Message, ToolTipIcon.Error);
+            }
         }
 
         private void OnStarted()
