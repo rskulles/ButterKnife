@@ -8,13 +8,14 @@
     <ApplicationIcon>../../packaging/windows/ButterKnife.ico</ApplicationIcon>
   </PropertyGroup>
 
-  <!-- Windows release: the same executable is a windowless tray app (Services/WindowsTray.cs, compiled only under the
+  <!-- Windows release: the same executable is a tray app (Services/WindowsTray.cs, compiled only under the
        net10.0-windows TFM, which defines WINDOWS) that hosts Kestrel in the background. Chosen by RID so development
-       builds stay plain net10.0; EnableWindowsTargeting lets the Linux CI runner build it. -->
+       builds stay plain net10.0; EnableWindowsTargeting lets the Linux CI runner build it. OutputType stays Exe on
+       purpose: the SDK only adds Blazor's framework script (_framework/blazor.web.js) for Exe projects, so the
+       console is hidden instead by the release workflow flipping the PE subsystem to GUI after publish. -->
   <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
-    <OutputType>WinExe</OutputType>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
@@ -39,7 +40,6 @@
     <PackageReference Include="Anthropic" Version="12.46.0" />
     <PackageReference Include="Markdig" Version="1.3.2" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
-    <PackageReference Include="Microsoft.Web.LibraryManager.Build" Version="3.0.114" />
     <PackageReference Include="QRCoder" Version="1.8.0" />
   </ItemGroup>
 

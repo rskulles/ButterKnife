@@ -487,7 +487,8 @@ src/ButterKnife/data/*.db
 src/ButterKnife/data/*.db-*
 
 # Client-side libraries are restored by LibMan (libman.json) at build time
-src/ButterKnife/wwwroot/lib/
+# src/ButterKnife/wwwroot/lib/ is committed on purpose (see CLAUDE.md "Toolchain"): restoring it during the build
+# registered the files too late for the static-asset manifest on a clean machine, so published builds 404'd on them.
 
 # Local `dotnet publish -o out/...` output (see README "Releases")
 out/

@@ -60,6 +60,19 @@ jobs:
         with:
           name: publish-win-x64
           path: out/win-x64
+      - name: Hide the console (PE subsystem → GUI)
+        shell: pwsh
+        # The project stays OutputType=Exe so the SDK includes Blazor's framework script; the tray app must not
+        # show a console, so set the executable's Windows subsystem to GUI (2) here. The .NET apphost allows this.
+        run: |
+          $path = "out/win-x64/ButterKnife.exe"
+          $bytes = [IO.File]::ReadAllBytes($path)
+          $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+          if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x00004550) { throw "not a PE file" }
+          $subsystem = $pe + 4 + 20 + 68
+          Write-Host "subsystem was $([BitConverter]::ToUInt16($bytes, $subsystem)); setting 2 (GUI)"
+          $bytes[$subsystem] = 2; $bytes[$subsystem + 1] = 0
+          [IO.File]::WriteAllBytes($path, $bytes)
       - uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
