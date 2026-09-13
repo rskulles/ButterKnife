@@ -13,6 +13,7 @@ builder.Services.AddRazorComponents()
 builder.Services.AddLlmBackends(builder.Configuration);
 builder.Services.AddDataStores(builder.Configuration);
 builder.Services.AddSingleton<LanAddressService>(); // "open on your phone" QR code
+builder.Services.AddSingleton<NetworkPinGate>(); // optional PIN for devices other than this computer
 
 // Settings → General asks GitHub for the latest release (only then, and cached); a short timeout keeps the page snappy offline.
 builder.Services.AddHttpClient(UpdateChecker.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10));
@@ -40,9 +41,13 @@ if (!app.Environment.IsDevelopment())
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
 
+// Devices that have not entered the PIN (when one is set) are sent to /unlock; this computer never is.
+app.UseMiddleware<NetworkPinMiddleware>();
+
 app.UseAntiforgery();
 
 app.MapStaticAssets(DesktopLauncher.StaticAssetsManifestPath);
+app.MapNetworkPin();
 
 // Settings → Data → "Download a backup": a consistent snapshot of the database, streamed as a file and deleted
 // once sent. A plain GET so the browser handles the download itself (no circuit round trip for a large file).

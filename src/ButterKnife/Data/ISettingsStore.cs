@@ -24,4 +24,10 @@ public static class SettingKeys
 
     /// <summary>"false" to stop Settings → General asking GitHub whether a newer release exists. Unset means on.</summary>
     public const string CheckForUpdates = "updates.check";
+
+    /// <summary>Salted PBKDF2 hash of the PIN other devices must enter (see NetworkPinGate); unset means no PIN.</summary>
+    public const string NetworkPinHash = "network.pin_hash";
+
+    /// <summary>Random value regenerated with the PIN and embedded in unlock cookies, so a change signs every device out.</summary>
+    public const string NetworkPinStamp = "network.pin_stamp";
 }

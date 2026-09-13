@@ -44,7 +44,8 @@ program, so backing it up or moving it is a copy and paste. On a Mac it's in `~/
   address or the `/v1` one, either is fine.
 
 **3. Use it from the couch (optional).** Under **Settings → General**, flip on *Reachable from other devices on the
-local network* and restart ButterKnife. Then hit *Open on phone* in any chat and scan the code.
+local network* and restart ButterKnife. Then hit *Open on phone* in any chat and scan the code. Set a PIN on the same
+page so only people who know it can open your chats from the Wi‑Fi; your own computer never has to type it.
 
 ## What you get
 

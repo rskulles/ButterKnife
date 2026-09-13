@@ -8,6 +8,7 @@
 @inject NavigationManager Nav
 @inject IHostApplicationLifetime Lifetime
 @inject UpdateChecker Updates
+@inject NetworkPinGate Pin
 
 <h1 class="h4">General</h1>
 <p class="text-muted">Applies to everyone who opens this ButterKnife, on any device.</p>
@@ -74,7 +75,8 @@
         </div>
         <div class="form-text">
             On: ButterKnife listens on every network interface so a phone or another computer on the same Wi‑Fi can open it
-            (use "Open on phone" in a chat for a QR code). Off: only this computer can reach it.
+            (use "Open on phone" in a chat for a QR code); set a PIN below so only people who know it can get in.
+            Off: only this computer can reach it.
         </div>
         <div class="small mt-2" role="status">
             @if (_listenOnLan == _access.ListensOnLan)
@@ -90,6 +92,61 @@
                 <span class="text-warning-emphasis"><i class="bi bi-arrow-repeat me-1" aria-hidden="true"></i>Restart ButterKnife to apply. It is currently @(_access.ListensOnLan ? "reachable on the local network" : "localhost only").</span>
             }
         </div>
+
+        <hr class="my-4" />
+
+        @* PIN for other devices: set/change/remove. The gate keeps the hash; this page only ever sees the new PIN. *@
+        <h2 class="h6">PIN for other devices</h2>
+        @if (_pinSet && !_editingPin)
+        {
+            <p class="small mb-2" role="status">
+                <i class="bi bi-lock-fill text-success me-1" aria-hidden="true"></i>Other devices must enter a PIN.
+                <button type="button" class="btn btn-link btn-sm p-0 align-baseline ms-1" @onclick="() => _editingPin = true" disabled="@_busy">Change</button>
+                <span class="text-body-secondary mx-1">·</span>
+                <button type="button" class="btn btn-link btn-sm p-0 align-baseline link-danger" @onclick="RemovePinAsync" disabled="@_busy">Remove</button>
+            </p>
+        }
+        else
+        {
+            @if (!_pinSet)
+            {
+                <p class="small mb-2"><i class="bi bi-unlock me-1" aria-hidden="true"></i>No PIN: anyone on your network can open this ButterKnife while it is reachable from other devices.</p>
+            }
+            <div class="row g-2 align-items-start">
+                <div class="col">
+                    <label class="visually-hidden" for="pin-new">New PIN</label>
+                    <input id="pin-new" type="password" class="form-control" placeholder="New PIN" @bind="_pin" @bind:event="oninput" @onkeydown="OnPinKeyDownAsync"
+                           autocomplete="new-password" maxlength="@NetworkPinGate.MaxLength" disabled="@_busy" />
+                </div>
+                <div class="col">
+                    <label class="visually-hidden" for="pin-confirm">Repeat the PIN</label>
+                    <input id="pin-confirm" type="password" class="form-control" placeholder="Again" @bind="_pinConfirm" @bind:event="oninput" @onkeydown="OnPinKeyDownAsync"
+                           autocomplete="new-password" maxlength="@NetworkPinGate.MaxLength" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <button type="button" class="btn btn-primary" @onclick="SavePinAsync" disabled="@(_busy || !CanSavePin)">@(_pinSet ? "Change" : "Set PIN")</button>
+                </div>
+                @if (_pinSet)
+                {
+                    <div class="col-auto">
+                        <button type="button" class="btn btn-outline-secondary" @onclick="CancelPinEdit" disabled="@_busy">Cancel</button>
+                    </div>
+                }
+            </div>
+            @if (PinProblem is { } problem)
+            {
+                <div class="form-text text-warning-emphasis">@problem</div>
+            }
+        }
+        <div class="form-text">
+            Asked once per device and remembered for 30 days; this computer never needs it. Any characters,
+            @NetworkPinGate.MinLength to @NetworkPinGate.MaxLength of them. Changing or removing the PIN signs every other device out.
+            Forgot it? Open Settings on this computer and set a new one.
+        </div>
+        @if (_pinMessage is not null)
+        {
+            <div class="small mt-2 @(_pinOk ? "text-success" : "text-danger")" role="status">@_pinMessage</div>
+        }
 
         @if (DesktopLauncher.IsBundled)
         {
@@ -115,6 +172,17 @@
     private bool _checkForUpdates = true;
     private bool _checking;
     private UpdateCheck? _update;
+
+    private bool _pinSet;
+    private bool _editingPin;
+    private string _pin = "";
+    private string _pinConfirm = "";
+    private string? _pinMessage;
+    private bool _pinOk;
+
+    private string? PinProblem => _pin.Length == 0 ? null : NetworkPinGate.Validate(_pin) ?? (_pinConfirm.Length > 0 && _pinConfirm != _pin ? "The two entries differ." : null);
+
+    private bool CanSavePin => _pin.Length > 0 && _pin == _pinConfirm && NetworkPinGate.Validate(_pin) is null;
 
     private bool Dirty => !string.Equals(_name.Trim(), _saved, StringComparison.Ordinal);
 
@@ -176,6 +244,75 @@
         _access = Lan.ForPage(new Uri(Nav.BaseUri));
         _listenOnLan = await Settings.GetAsync(SettingKeys.ListenOnLan) is { } saved ? saved == "true" : _access.ListensOnLan;
         _checkForUpdates = await Settings.GetAsync(SettingKeys.CheckForUpdates) != "false";
+        _pinSet = await Pin.IsEnabledAsync(CancellationToken.None);
+    }
+
+    private async Task OnPinKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && CanSavePin)
+        {
+            await SavePinAsync();
+        }
+    }
+
+    private async Task SavePinAsync()
+    {
+        if (!CanSavePin || _busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _pinMessage = null;
+        try
+        {
+            await Pin.SetPinAsync(_pin, CancellationToken.None);
+            _pinOk = true;
+            _pinMessage = _pinSet ? "PIN changed. Every other device has to enter the new one." : "PIN set. Other devices will be asked for it from now on.";
+            _pinSet = true;
+            CancelPinEdit();
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _pinOk = false;
+            _pinMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RemovePinAsync()
+    {
+        _busy = true;
+        _pinMessage = null;
+        try
+        {
+            await Pin.SetPinAsync(null, CancellationToken.None);
+            _pinSet = false;
+            _pinOk = true;
+            _pinMessage = "PIN removed. Other devices can open ButterKnife without one.";
+            CancelPinEdit();
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _pinOk = false;
+            _pinMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void CancelPinEdit()
+    {
+        _editingPin = false;
+        _pin = "";
+        _pinConfirm = "";
     }
 
     private async Task SetListenOnLanAsync(bool on)
