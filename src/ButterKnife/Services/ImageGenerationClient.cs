@@ -7,8 +7,11 @@ using ButterKnife.Options;
 
 namespace ButterKnife.Services;
 
-/// <summary>What the "/image" command asks for: a size in pixels and, optionally, steps and a seed.</summary>
-public sealed record ImageRequest(string Prompt, int Width = 1024, int Height = 1024, int? Steps = null, int? Seed = null);
+/// <summary>A style (LoRA) the image server offers by name, with the strength to apply it at.</summary>
+public sealed record ImageStyle(string Name, double Scale = 1.0);
+
+/// <summary>What the "/image" command asks for: a size in pixels and, optionally, steps, a seed and styles.</summary>
+public sealed record ImageRequest(string Prompt, int Width = 1024, int Height = 1024, int? Steps = null, int? Seed = null, IReadOnlyList<ImageStyle>? Styles = null);
 
 /// <summary>A picture back from the server: PNG bytes plus what it reports about the render.</summary>
 public sealed record GeneratedImage(byte[] Png, int? Seed, double? Seconds, string? Model);
@@ -42,6 +45,23 @@ public sealed class ImageGenerationClient(IHttpClientFactory httpClientFactory)
             : [];
     }
 
+    /// <summary>The styles (LoRA adapters) the server offers, from Crayon Cloud's /loras route; empty for servers without it.</summary>
+    public async Task<IReadOnlyList<string>> ListStylesAsync(LlmConnection connection, CancellationToken cancellationToken)
+    {
+        using var client = httpClientFactory.CreateClient(LlmClientBase.HttpClientName);
+        using var request = new HttpRequestMessage(HttpMethod.Get, Resolve(connection, "loras"));
+        Authorize(request, connection);
+        using var response = await client.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return [];
+        }
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        return json.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array
+            ? data.EnumerateArray().Select(l => l.TryGetProperty("name", out var n) ? n.GetString() : null).OfType<string>().ToArray()
+            : [];
+    }
+
     public async Task<GeneratedImage> GenerateAsync(LlmConnection connection, ImageRequest request, CancellationToken cancellationToken)
     {
         if (connection.Kind != BackendKind.ImageGeneration)
@@ -49,7 +69,13 @@ public sealed class ImageGenerationClient(IHttpClientFactory httpClientFactory)
             throw new InvalidOperationException($"'{connection.Name}' is not an image generation connection.");
         }
 
-        var body = new WireRequest(request.Prompt, $"{request.Width}x{request.Height}", request.Steps, request.Seed, string.IsNullOrWhiteSpace(connection.DefaultModel) ? null : connection.DefaultModel);
+        var body = new WireRequest(
+            request.Prompt,
+            $"{request.Width}x{request.Height}",
+            request.Steps,
+            request.Seed,
+            string.IsNullOrWhiteSpace(connection.DefaultModel) ? null : connection.DefaultModel,
+            request.Styles is { Count: > 0 } styles ? styles.Select(s => new WireLora(s.Name, s.Scale)).ToArray() : null);
         using var client = httpClientFactory.CreateClient(LlmClientBase.HttpClientName);
         using var http = new HttpRequestMessage(HttpMethod.Post, Resolve(connection, "images/generations"))
         {
@@ -93,11 +119,14 @@ public sealed class ImageGenerationClient(IHttpClientFactory httpClientFactory)
         string Size,
         int? Steps,
         int? Seed,
-        string? Model)
+        string? Model,
+        WireLora[]? Loras)
     {
         [JsonPropertyName("response_format")] public string ResponseFormat => "b64_json";
         public int N => 1;
     }
+
+    private sealed record WireLora(string Name, double Scale);
 
     private sealed record WireResponse(WireImage[]? Data, [property: JsonPropertyName("crayoncloud")] WireExtras? CrayonCloud);
 
@@ -114,14 +143,32 @@ public sealed class ImageGenerationService(IConnectionStore connections, ImageGe
 
     public async Task<GeneratedImage> GenerateAsync(LlmConnection connection, ImageRequest request, CancellationToken cancellationToken = default) =>
         await client.GenerateAsync(connection, request, cancellationToken);
+
+    public async Task<IReadOnlyList<string>> ListStylesAsync(LlmConnection connection, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await client.ListStylesAsync(connection, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return []; // an unreachable image server just means no styles to pick from
+        }
+    }
 }
 
-/// <summary>"/image a red bicycle" or "/img …" typed into the composer.</summary>
-public static class ImageCommand
+/// <summary>"/image a red bicycle" or "/img …" typed into the composer, with optional "--lora name[:scale]" styles anywhere after the prompt.</summary>
+public static partial class ImageCommand
 {
     private static readonly string[] Prefixes = ["/image", "/img", "/imagine"];
 
-    public static bool TryParse(string input, out string prompt)
+    public static bool TryParse(string input, out string prompt) => TryParse(input, out prompt, out _);
+
+    public static bool TryParse(string input, out string prompt, out IReadOnlyList<ImageStyle> styles)
     {
         var text = input.TrimStart();
         foreach (var prefix in Prefixes)
@@ -129,11 +176,24 @@ public static class ImageCommand
             if (text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
                 && (text.Length == prefix.Length || char.IsWhiteSpace(text[prefix.Length])))
             {
-                prompt = text[prefix.Length..].Trim();
+                var rest = text[prefix.Length..];
+                var found = new List<ImageStyle>();
+                rest = LoraFlag().Replace(rest, m =>
+                {
+                    var scale = m.Groups["scale"].Success && double.TryParse(m.Groups["scale"].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : 1.0;
+                    found.Add(new ImageStyle(m.Groups["name"].Value, scale));
+                    return " ";
+                });
+                prompt = System.Text.RegularExpressions.Regex.Replace(rest, @"\s{2,}", " ").Trim();
+                styles = found;
                 return true;
             }
         }
         prompt = "";
+        styles = [];
         return false;
     }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?:^|\s)--(?:lora|style)[ =](?<name>[^\s:]+)(?::(?<scale>-?\d+(?:\.\d+)?))?(?=\s|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex LoraFlag();
 }

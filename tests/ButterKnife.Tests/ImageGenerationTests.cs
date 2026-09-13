@@ -22,6 +22,49 @@ public sealed class ImageGenerationTests
     }
 
     [Fact]
+    public void CommandParsingPullsStylesOutOfTheText()
+    {
+        Assert.True(ImageCommand.TryParse("/image a lighthouse --lora watercolor:0.8 at dusk --style sketch", out var prompt, out var styles));
+        Assert.Equal("a lighthouse at dusk", prompt);
+        Assert.Equal([new ImageStyle("watercolor", 0.8), new ImageStyle("sketch", 1.0)], styles);
+
+        Assert.True(ImageCommand.TryParse("/image plain", out prompt, out styles));
+        Assert.Equal("plain", prompt);
+        Assert.Empty(styles);
+
+        Assert.True(ImageCommand.TryParse("/image --lora=oil the sea", out prompt, out styles));
+        Assert.Equal("the sea", prompt);
+        Assert.Equal("oil", Assert.Single(styles).Name);
+    }
+
+    [Fact]
+    public async Task GenerateSendsStylesAsLoras()
+    {
+        var handler = StubHandler.Text("{\"created\":1,\"data\":[{\"b64_json\":\"AQID\",\"seed\":1}]}");
+        var client = new ImageGenerationClient(new StubClientFactory(handler, "http://crayon.test:8765/v1"));
+        var connection = TestConnections.Make("Crayon Cloud", BackendKind.ImageGeneration, "http://crayon.test:8765/v1");
+
+        await client.GenerateAsync(connection, new ImageRequest("x", Styles: [new ImageStyle("watercolor", 0.8)]), CancellationToken.None);
+        var loras = JsonDocument.Parse(handler.LastRequestBody!).RootElement.GetProperty("loras");
+        Assert.Equal("watercolor", loras[0].GetProperty("name").GetString());
+        Assert.Equal(0.8, loras[0].GetProperty("scale").GetDouble());
+
+        await client.GenerateAsync(connection, new ImageRequest("x"), CancellationToken.None);
+        Assert.False(JsonDocument.Parse(handler.LastRequestBody!).RootElement.TryGetProperty("loras", out _));
+    }
+
+    [Fact]
+    public async Task ListStylesReadsTheLorasRouteAndToleratesServersWithoutIt()
+    {
+        var connection = TestConnections.Make("Crayon Cloud", BackendKind.ImageGeneration, "http://crayon.test:8765/v1");
+        var with = new ImageGenerationClient(new StubClientFactory(StubHandler.Text("""{"object":"list","data":[{"name":"watercolor"},{"name":"sketch"}]}"""), "http://crayon.test:8765/v1"));
+        Assert.Equal(["watercolor", "sketch"], await with.ListStylesAsync(connection, CancellationToken.None));
+
+        var without = new ImageGenerationClient(new StubClientFactory(StubHandler.Text("not found", HttpStatusCode.NotFound), "http://crayon.test:8765/v1"));
+        Assert.Empty(await without.ListStylesAsync(connection, CancellationToken.None));
+    }
+
+    [Fact]
     public void ImageConnectionsAreNotChatBackends()
     {
         Assert.False(LlmClientFactory.IsChatBackend(BackendKind.ImageGeneration));

@@ -72,6 +72,8 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
 
     def do_GET(self):
+        if self.path == "/v1/loras":
+            self._json({"object": "list", "folder": "/stub/loras", "data": [{"name": "watercolor", "file": "watercolor.safetensors", "size": 1}, {"name": "sketch", "file": "sketch.safetensors", "size": 1}]}); return
         if self.path == "/api/ps":
             self._json({"models": [{"name": "fake-llama:8b", "model": "fake-llama:8b", "context_length": 8192}]})
         elif self.path.startswith("/api/v0/models/"):
@@ -96,7 +98,7 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/v1/images/generations":
             # Crayon Cloud / OpenAI images API: a small gradient PNG, after a pause that scales with --delay.
             body = json.loads(raw or b"{}")
-            print("POST /v1/images/generations", repr(body.get("prompt", ""))[:60], body.get("size"), "steps=%s seed=%s" % (body.get("steps"), body.get("seed")), flush=True)
+            print("POST /v1/images/generations", repr(body.get("prompt", ""))[:60], body.get("size"), "steps=%s seed=%s loras=%s" % (body.get("steps"), body.get("seed"), body.get("loras")), flush=True)
             time.sleep(DELAY * 20)
             seed = body.get("seed") if body.get("seed") is not None else 4242
             self._json({"created": int(time.time()), "data": [{"b64_json": base64.b64encode(fake_png(256, 256, seed)).decode(), "seed": seed}],

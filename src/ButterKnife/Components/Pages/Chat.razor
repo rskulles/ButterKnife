@@ -530,6 +530,22 @@
                             <option value="off">Off</option>
                         </select>
                         <div class="form-text">For models that can reason first (Qwen3, DeepSeek, Claude). Others ignore it.</div>
+                        @if (_imageStyles.Count > 0)
+                        {
+                            <label class="form-label mt-3 mb-1" for="opt-image-style">Picture style (@_imageConnection?.Name)</label>
+                            <div class="input-group input-group-sm">
+                                <select class="form-select" id="opt-image-style" value="@_imageStyle" @onchange="e => _imageStyle = e.Value?.ToString() ?? string.Empty">
+                                    <option value="">None</option>
+                                    @foreach (var style in _imageStyles)
+                                    {
+                                        <option value="@style">@style</option>
+                                    }
+                                </select>
+                                <input type="number" class="form-control" style="max-width: 5.5rem" min="-2" max="3" step="0.1" value="@_imageStyleScale" aria-label="Style strength"
+                                       @onchange="e => _imageStyleScale = double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 1.0" disabled="@(_imageStyle.Length == 0)" />
+                            </div>
+                            <div class="form-text">Applied to /image pictures; or name one in the text: <code>--lora @(_imageStyles[0]):0.8</code>. Not saved.</div>
+                        }
                         <div class="form-text mt-2">Saved with this chat.</div>
                     </div>
                 }
@@ -1071,17 +1087,21 @@
             return;
         }
 
-        if (_imageConnection is { } imageConnection && ImageCommand.TryParse(_input, out var imagePrompt))
+        if (_imageConnection is { } imageConnection && ImageCommand.TryParse(_input, out var imagePrompt, out var flagStyles))
         {
             if (imagePrompt.Length == 0)
             {
                 _imageError = "Describe the picture after /image.";
                 return;
             }
+            // Styles named in the text win; otherwise the one picked in the model settings popover applies.
+            var styles = flagStyles.Count > 0 ? flagStyles
+                : _imageStyle.Length > 0 ? [new ImageStyle(_imageStyle, _imageStyleScale)]
+                : (IReadOnlyList<ImageStyle>)[];
             var draft = _input;
             _input = "";
             _imageError = null;
-            if (!await GenerateImageAsync(imageConnection, imagePrompt))
+            if (!await GenerateImageAsync(imageConnection, imagePrompt, styles))
             {
                 _input = draft;
             }
@@ -2154,6 +2174,11 @@
 
     private readonly Dictionary<ChatImage, int> _imageSeeds = [];
 
+    /// <summary>Styles (LoRAs) the image connection offers, and the one picked in the model settings popover for this session.</summary>
+    private IReadOnlyList<string> _imageStyles = [];
+    private string _imageStyle = "";
+    private double _imageStyleScale = 1.0;
+
     private string GeneratedImageTitle(ChatImage image) => _imageSeeds.TryGetValue(image, out var seed) ? $"Seed {seed} · click to toggle size" : "Click to toggle size";
 
     private async Task LoadImageConnectionAsync()
@@ -2161,6 +2186,11 @@
         try
         {
             _imageConnection = await ImageGen.GetConnectionAsync(_disposed.Token);
+            _imageStyles = _imageConnection is null ? [] : await ImageGen.ListStylesAsync(_imageConnection, _disposed.Token);
+            if (!_imageStyles.Contains(_imageStyle, StringComparer.OrdinalIgnoreCase))
+            {
+                _imageStyle = "";
+            }
         }
         catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
         {
@@ -2188,7 +2218,7 @@
     /// image connection rendered. Runs through the same streaming state as a text reply so Stop and the throbber
     /// work; the chat model is not involved (later turns see a short note in place of the pixels).
     /// </summary>
-    private async Task<bool> GenerateImageAsync(LlmConnection connection, string prompt)
+    private async Task<bool> GenerateImageAsync(LlmConnection connection, string prompt, IReadOnlyList<ImageStyle> styles)
     {
         _error = null;
         Guid conversationId;
@@ -2222,9 +2252,10 @@
         ChatImage? picture = null;
         try
         {
-            var result = await ImageGen.GenerateAsync(connection, new ImageRequest(prompt), token);
+            var result = await ImageGen.GenerateAsync(connection, new ImageRequest(prompt, Styles: styles), token);
             picture = new ChatImage("image/png", result.Png);
-            reply.ModelName = string.IsNullOrEmpty(result.Model) ? connection.Name : $"{result.Model} ({connection.Name})";
+            var styleNote = styles.Count > 0 ? " + " + string.Join(", ", styles.Select(s => s.Scale == 1.0 ? s.Name : $"{s.Name} ×{s.Scale:0.##}")) : "";
+            reply.ModelName = (string.IsNullOrEmpty(result.Model) ? connection.Name : $"{result.Model} ({connection.Name})") + styleNote;
             if (result.Seed is { } seed)
             {
                 _imageSeeds[picture] = seed; // shown in the picture's tooltip this session; not stored
