@@ -44,6 +44,13 @@
     <Content Update="libman.json;appsettings.Development.json" CopyToPublishDirectory="Never" />
   </ItemGroup>
 
+  <!-- The licence and third-party notices ship beside the executable in every download (the permissive licences of
+       the bundled components require their notices to travel with copies). -->
+  <ItemGroup>
+    <None Include="../../LICENSE.md" Link="LICENSE.md" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Anthropic" Version="12.46.0" />
     <PackageReference Include="Markdig" Version="1.3.2" />

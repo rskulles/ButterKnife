@@ -24,6 +24,7 @@ cp "$PUBLISH"/*.dylib "$APP/Contents/MacOS/" 2>/dev/null || true
 cp -R "$PUBLISH/wwwroot" "$APP/Contents/Resources/wwwroot"
 cp "$PUBLISH/appsettings.json" "$PUBLISH/ButterKnife.staticwebassets.endpoints.json" "$APP/Contents/Resources/"
 cp "$HERE/packaging/macos/ButterKnife.icns" "$HERE/packaging/macos/MenuIcon.png" "$HERE/packaging/macos/MenuIcon@2x.png" "$APP/Contents/Resources/"
+cp "$PUBLISH/LICENSE.md" "$PUBLISH/THIRD-PARTY-NOTICES.md" "$APP/Contents/Resources/"
 sed "s/__VERSION__/$VERSION/g" "$HERE/packaging/macos/Info.plist" > "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
