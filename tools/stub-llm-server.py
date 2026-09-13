@@ -40,6 +40,7 @@ def hi():
 import re
 DELAY = 0.08
 WORDS = re.findall(r"\S+\s*|\s+", REPLY)
+CONTINUATION = re.findall(r"\S+\s*|\s+", "and here is the rest of the reply, continued from where it stopped.")
 THINKING = re.findall(r"\S+\s*|\s+", "The user wants a markdown check. I should show a heading, some inline styles, a code block, a list, a table and a quote. ")
 
 class H(BaseHTTPRequestHandler):
@@ -83,29 +84,41 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/show":
             caps = ["completion", "vision"] if body.get("model") == "fake-llama:8b" else ["completion"]
             self._json({"capabilities": caps, "model_info": {"general.architecture": "llama", "llama.context_length": 131072}}); return
+        # Test hooks for the chat page's Continue: a user message containing "[cut]" gets a reply cut off after a few
+        # words with a "length" finish; a request whose last message is the assistant's (a continuation) gets the rest.
+        msgs = body.get("messages", [])
+        last = msgs[-1] if msgs else {}
+        continuing = last.get("role") == "assistant"
+        cut = (not continuing) and "[cut]" in str(last.get("content", ""))
+        words = CONTINUATION if continuing else (WORDS[:6] if cut else WORDS)
+        finish = "length" if cut else "stop"
         if self.path == "/api/chat":
             self.send_response(200); self.send_header("Content-Type", "application/x-ndjson"); self.end_headers()
             # Thinking models (Ollama 0.9+) stream their reasoning in message.thinking before the answer.
-            for w in THINKING:
-                self.wfile.write((json.dumps({"model": body["model"], "message": {"role": "assistant", "content": "", "thinking": w}, "done": False}) + "\n").encode()); self.wfile.flush(); time.sleep(DELAY)
-            for w in WORDS:
+            if not continuing:
+                for w in THINKING:
+                    self.wfile.write((json.dumps({"model": body["model"], "message": {"role": "assistant", "content": "", "thinking": w}, "done": False}) + "\n").encode()); self.wfile.flush(); time.sleep(DELAY)
+            for w in words:
                 self.wfile.write((json.dumps({"model": body["model"], "message": {"role": "assistant", "content": w}, "done": False}) + "\n").encode()); self.wfile.flush(); time.sleep(DELAY)
             prompt_chars = sum(len(m.get("content") or "") for m in body.get("messages", []))
-            self.wfile.write((json.dumps({"model": body["model"], "message": {"role": "assistant", "content": ""}, "done": True, "prompt_eval_count": max(1, prompt_chars // 4), "eval_count": len(WORDS), "prompt_eval_duration": 180000000, "eval_duration": int(len(WORDS) * 0.08 * 1e9)}) + "\n").encode()); self.wfile.flush()
+            self.wfile.write((json.dumps({"model": body["model"], "message": {"role": "assistant", "content": ""}, "done": True, "done_reason": finish, "prompt_eval_count": max(1, prompt_chars // 4), "eval_count": len(words), "prompt_eval_duration": 180000000, "eval_duration": int(len(words) * 0.08 * 1e9)}) + "\n").encode()); self.wfile.flush()
         elif self.path == "/v1/chat/completions":
             self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
             # fake-gpt thinks inline with <think> tags (as Qwen3 does through llama.cpp/LM Studio); other models use the
             # separated reasoning_content field (DeepSeek, vLLM).
-            if body.get("model") == "fake-gpt":
+            if continuing:
+                pass
+            elif body.get("model") == "fake-gpt":
                 for w in ["<think>"] + THINKING + ["</think>"]:
                     self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {"content": w}, "index": 0}]}) + "\n\n").encode()); self.wfile.flush(); time.sleep(DELAY)
             else:
                 for w in THINKING:
                     self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {"reasoning_content": w}, "index": 0}]}) + "\n\n").encode()); self.wfile.flush(); time.sleep(DELAY)
-            for w in WORDS:
+            for w in words:
                 self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {"content": w}, "index": 0}]}) + "\n\n").encode()); self.wfile.flush(); time.sleep(DELAY)
+            self.wfile.write(("data: " + json.dumps({"choices": [{"delta": {}, "index": 0, "finish_reason": finish}]}) + "\n\n").encode()); self.wfile.flush()
             prompt_chars = sum(len(m.get("content") if isinstance(m.get("content"), str) else "") for m in body.get("messages", []))
-            self.wfile.write(("data: " + json.dumps({"choices": [], "usage": {"prompt_tokens": max(1, prompt_chars // 4), "completion_tokens": len(WORDS)}}) + "\n\n").encode()); self.wfile.flush()
+            self.wfile.write(("data: " + json.dumps({"choices": [], "usage": {"prompt_tokens": max(1, prompt_chars // 4), "completion_tokens": len(words)}}) + "\n\n").encode()); self.wfile.flush()
             self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush()
         elif self.path == "/v1/messages":
             print("  anthropic system:", repr(body.get("system")), "key:", self.headers.get("x-api-key"), flush=True)

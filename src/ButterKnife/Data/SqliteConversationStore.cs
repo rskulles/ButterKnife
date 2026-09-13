@@ -125,6 +125,22 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         return messageId;
     }
 
+    public async Task SetMessageContentAsync(Guid conversationId, long messageId, string content, string? reasoning, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await db.OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE messages SET content = $content, reasoning = $reasoning WHERE conversation_id = $cid AND id = $mid;
+            UPDATE conversations SET updated_at = $now WHERE id = $cid;
+            """;
+        cmd.Parameters.AddWithValue("$cid", conversationId.ToString("D"));
+        cmd.Parameters.AddWithValue("$mid", messageId);
+        cmd.Parameters.AddWithValue("$content", content);
+        cmd.Parameters.AddWithValue("$reasoning", (object?)reasoning ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$now", SqliteDatabase.Format(DateTimeOffset.UtcNow));
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task DeleteMessageAsync(Guid conversationId, long messageId, CancellationToken cancellationToken = default)
     {
         await using var connection = await db.OpenAsync(cancellationToken);

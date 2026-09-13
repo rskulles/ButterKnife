@@ -15,6 +15,9 @@ public interface IConversationStore
     /// <summary>Returns the new message's id.</summary>
     Task<long> AppendMessageAsync(Guid conversationId, ChatMessage message, CancellationToken cancellationToken = default);
 
+    /// <summary>Rewrites a message's text (and reasoning), e.g. after continuing a cut-off reply.</summary>
+    Task SetMessageContentAsync(Guid conversationId, long messageId, string content, string? reasoning, CancellationToken cancellationToken = default);
+
     /// <summary>Removes one message (and its images).</summary>
     Task DeleteMessageAsync(Guid conversationId, long messageId, CancellationToken cancellationToken = default);
 

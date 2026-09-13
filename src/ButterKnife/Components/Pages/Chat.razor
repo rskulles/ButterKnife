@@ -111,10 +111,14 @@
                     {
                         <ButterKnifeThrobber Stats="turn.GetStats"/>
                     }
-                    else if (turn.Chunks > 0)
+                    else if (turn.Chunks > 0 || turn.Note is not null)
                     {
-                        <div class="small text-body-secondary mt-1"
-                             title="@ButterKnifeThrobber.StatsTooltip">@ButterKnifeThrobber.FormatStats(turn.GetStats())</div>
+                        <div class="small text-body-secondary mt-1" title="@ButterKnifeThrobber.StatsTooltip">
+                            @(turn.Chunks > 0 ? ButterKnifeThrobber.FormatStats(turn.GetStats()) : "")@if (turn.Note is { } note)
+                            {
+                                <span class="text-warning-emphasis">@(turn.Chunks > 0 ? " · " : "")@note</span>
+                            }
+                        </div>
                     }
                 }
                 else if (_editing == turn)
@@ -185,6 +189,13 @@
                             }
                             @if (turn.Role == ChatRole.Assistant && turn == _turns[^1])
                             {
+                                @if (turn.CanContinue)
+                                {
+                                    <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Continue the reply where it stopped"
+                                            aria-label="Continue the reply" @onclick="ContinueAsync" disabled="@(_isStreaming || Selected is null)">
+                                        <i class="bi bi-fast-forward" aria-hidden="true"></i> Continue
+                                    </button>
+                                }
                                 <button type="button" class="btn btn-link btn-sm p-0 px-1 text-body-secondary" title="Regenerate this reply"
                                         aria-label="Regenerate this reply" @onclick="RegenerateAsync" disabled="@(_isStreaming || Selected is null)">
                                     <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
@@ -733,11 +744,21 @@
         return true;
     }
 
-    /// <summary>Adds a streaming assistant turn, runs the request, persists the outcome and refreshes the context meter.</summary>
-    private async Task StreamReplyAsync(Guid conversationId, ModelDescriptor model, List<ChatMessage> history)
+    /// <summary>
+    /// Streams a reply: into a new assistant turn, or appended to <paramref name="continueTurn"/> when continuing a
+    /// cut-off reply (the history then ends with that partial reply, which the backends treat as a prefix to extend).
+    /// Persists the outcome and refreshes the context meter.
+    /// </summary>
+    private async Task StreamReplyAsync(Guid conversationId, ModelDescriptor model, List<ChatMessage> history, ChatTurn? continueTurn = null)
     {
-        var reply = new ChatTurn(ChatRole.Assistant, "", Markdown) { IsStreaming = true };
-        _turns.Add(reply);
+        var reply = continueTurn ?? new ChatTurn(ChatRole.Assistant, "", Markdown);
+        reply.Stopped = false;
+        reply.Finish = null;
+        reply.IsStreaming = true;
+        if (continueTurn is null)
+        {
+            _turns.Add(reply);
+        }
 
         _isStreaming = true;
         _generation = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
@@ -813,13 +834,12 @@
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             completedText = reply.Text; // keep whatever streamed before Stop / disconnect
+            reply.Stopped = true;
             if (_disposed.IsCancellationRequested)
             {
                 await PersistReplyAsync(conversationId, reply, completedText);
                 return; // circuit is gone; nothing to render
             }
-
-            reply.Append(reply.Text.Length == 0 ? "(stopped)" : " (stopped)");
         }
         catch (Exception ex)
         {
@@ -897,6 +917,25 @@
         _error = null;
         _contextTokens = null;
         await StreamReplyAsync(conversationId, model, BuildHistory());
+    }
+
+    /// <summary>Asks the model to carry on from where the last reply stopped; the new text is appended to that reply.</summary>
+    private async Task ContinueAsync()
+    {
+        if (_isStreaming || Selected is not { } model || _conversationId is not { } conversationId
+            || _turns.Count == 0 || _turns[^1] is not { Role: ChatRole.Assistant, MessageId: not null, CanContinue: true } last)
+        {
+            return;
+        }
+
+        _error = null;
+        var history = BuildHistory();
+        // The partial reply is the last message and acts as a prefix; Anthropic rejects trailing whitespace there.
+        if (history.Count > 0 && history[^1].Role == ChatRole.Assistant)
+        {
+            history[^1] = history[^1] with { Content = history[^1].Content.TrimEnd() };
+        }
+        await StreamReplyAsync(conversationId, model, history, last);
     }
 
     /// <summary>Removes just this message. The compaction checkpoint follows the store's rule (cleared if it no longer fits).</summary>
@@ -1031,9 +1070,16 @@
 
         try
         {
-            reply.MessageId = await Store.AppendMessageAsync(conversationId,
-                new ChatMessage(ChatRole.Assistant, text) { Reasoning = reply.Reasoning.Length > 0 ? reply.Reasoning : null }, CancellationToken.None);
-            reply.CreatedAt = DateTimeOffset.Now;
+            var reasoning = reply.Reasoning.Length > 0 ? reply.Reasoning : null;
+            if (reply.MessageId is { } existing)
+            {
+                await Store.SetMessageContentAsync(conversationId, existing, text, reasoning, CancellationToken.None); // continued reply
+            }
+            else
+            {
+                reply.MessageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.Assistant, text) { Reasoning = reasoning }, CancellationToken.None);
+                reply.CreatedAt = DateTimeOffset.Now;
+            }
             Events.NotifyChanged();
         }
         catch (Exception ex)
@@ -1645,6 +1691,15 @@
 
         /// <summary>Why the backend stopped, when it said; Length means the reply was cut off and can be continued.</summary>
         public FinishReason? Finish { get; set; }
+
+        /// <summary>The user pressed Stop (or the circuit dropped) before the model finished.</summary>
+        public bool Stopped { get; set; }
+
+        /// <summary>A reply cut short by the token limit or by Stop can be continued in place.</summary>
+        public bool CanContinue => !IsStreaming && Text.Length > 0 && (Stopped || Finish == FinishReason.Length);
+
+        /// <summary>Shown after the stats when the reply did not finish on its own.</summary>
+        public string? Note => IsStreaming ? null : Stopped ? "stopped" : Finish == FinishReason.Length ? "cut off at the token limit" : null;
 
         public void AppendReasoning(string chunk)
         {
