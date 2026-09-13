@@ -9,8 +9,14 @@ public interface IConversationStore
 
     Task<Conversation?> GetAsync(Guid id, CancellationToken cancellationToken = default);
 
-    /// <summary>Most recently updated first.</summary>
+    /// <summary>Pinned first, then most recently updated first; archived conversations are included and flagged.</summary>
     Task<IReadOnlyList<ConversationSummary>> ListAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Pinned conversations stay at the top of the sidebar.</summary>
+    Task SetPinnedAsync(Guid conversationId, bool pinned, CancellationToken cancellationToken = default);
+
+    /// <summary>Archived conversations are folded away in the sidebar; they can still be opened and continued.</summary>
+    Task SetArchivedAsync(Guid conversationId, bool archived, CancellationToken cancellationToken = default);
 
     /// <summary>Returns the new message's id.</summary>
     Task<long> AppendMessageAsync(Guid conversationId, ChatMessage message, CancellationToken cancellationToken = default);

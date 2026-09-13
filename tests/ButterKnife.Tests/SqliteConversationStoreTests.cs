@@ -337,6 +337,33 @@ public sealed class SqliteConversationStoreTests : IDisposable
         Assert.Equal(userId, loaded[0].Id);
     }
 
+    [Fact]
+    public async Task PinnedConversationsListFirstAndArchivedOnesAreFlagged()
+    {
+        var older = await _store.CreateAsync("older", ConnA, "m", null, CancellationToken.None);
+        await Task.Delay(10);
+        var newer = await _store.CreateAsync("newer", ConnA, "m", null, CancellationToken.None);
+        await Task.Delay(10);
+        var newest = await _store.CreateAsync("newest", ConnA, "m", null, CancellationToken.None);
+
+        Assert.Equal(["newest", "newer", "older"], (await _store.ListAsync(CancellationToken.None)).Select(c => c.Title));
+
+        await _store.SetPinnedAsync(older.Id, true, CancellationToken.None);
+        await _store.SetArchivedAsync(newer.Id, true, CancellationToken.None);
+        var list = await _store.ListAsync(CancellationToken.None);
+
+        Assert.Equal(["older", "newest", "newer"], list.Select(c => c.Title));
+        Assert.True(list[0].Pinned);
+        Assert.False(list[0].Archived);
+        Assert.True(list[2].Archived);
+        Assert.Equal(older.UpdatedAt, list[0].UpdatedAt); // flags are not activity
+
+        await _store.SetPinnedAsync(older.Id, false, CancellationToken.None);
+        await _store.SetArchivedAsync(newer.Id, false, CancellationToken.None);
+        Assert.All(await _store.ListAsync(CancellationToken.None), c => Assert.False(c.Pinned || c.Archived));
+        Assert.NotNull(await _store.GetAsync(newest.Id, CancellationToken.None));
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

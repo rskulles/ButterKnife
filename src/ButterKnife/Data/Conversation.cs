@@ -2,7 +2,8 @@ using ButterKnife.Services;
 
 namespace ButterKnife.Data;
 
-public sealed record ConversationSummary(Guid Id, string Title, DateTimeOffset UpdatedAt);
+/// <summary>A sidebar row. Pinned conversations sort first; archived ones are folded away but otherwise ordinary.</summary>
+public sealed record ConversationSummary(Guid Id, string Title, DateTimeOffset UpdatedAt, bool Pinned = false, bool Archived = false);
 
 public sealed record Conversation(
     Guid Id,

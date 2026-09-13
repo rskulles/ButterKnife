@@ -72,15 +72,37 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
     {
         await using var connection = await db.OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT id, title, updated_at FROM conversations ORDER BY updated_at DESC;";
+        cmd.CommandText = "SELECT id, title, updated_at, pinned, archived FROM conversations ORDER BY pinned DESC, updated_at DESC;";
 
         var list = new List<ConversationSummary>();
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            list.Add(new ConversationSummary(Guid.Parse(reader.GetString(0)), reader.GetString(1), SqliteDatabase.Parse(reader.GetString(2))));
+            list.Add(new ConversationSummary(
+                Guid.Parse(reader.GetString(0)),
+                reader.GetString(1),
+                SqliteDatabase.Parse(reader.GetString(2)),
+                Pinned: reader.GetInt64(3) != 0,
+                Archived: reader.GetInt64(4) != 0));
         }
         return list;
+    }
+
+    public Task SetPinnedAsync(Guid conversationId, bool pinned, CancellationToken cancellationToken = default) =>
+        SetFlagAsync(conversationId, "pinned", pinned, cancellationToken);
+
+    public Task SetArchivedAsync(Guid conversationId, bool archived, CancellationToken cancellationToken = default) =>
+        SetFlagAsync(conversationId, "archived", archived, cancellationToken);
+
+    /// <summary>Flags do not count as activity: updated_at is left alone so the order is not disturbed.</summary>
+    private async Task SetFlagAsync(Guid conversationId, string column, bool value, CancellationToken cancellationToken)
+    {
+        await using var connection = await db.OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"UPDATE conversations SET {column} = $value WHERE id = $id;"; // column is one of two literals above
+        cmd.Parameters.AddWithValue("$value", value ? 1 : 0);
+        cmd.Parameters.AddWithValue("$id", conversationId.ToString("D"));
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<long> AppendMessageAsync(Guid conversationId, ChatMessage message, CancellationToken cancellationToken = default)

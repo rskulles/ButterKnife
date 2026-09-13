@@ -22,37 +22,26 @@
                     <i class="bi bi-plus-square-fill me-2" aria-hidden="true"></i>New chat
                 </NavLink>
 
-                @foreach (var c in _conversations)
+                @foreach (var c in _conversations.Where(c => !c.Archived))
                 {
-                    <div class="d-flex align-items-center">
-                        @if (_pendingDelete == c.Id)
-                        {
-                            <span class="d-flex align-items-center gap-2 w-100 px-2 small" role="alertdialog" aria-label="Delete this chat?">
-                                <span class="flex-grow-1">Delete?</span>
-                                <button type="button" class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(c.Id)">Delete</button>
-                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelDelete">Keep</button>
-                            </span>
-                        }
-                        else if (_renaming == c.Id)
-                        {
-                            <span class="d-flex align-items-center gap-2 w-100 px-2" role="group" aria-label="Rename chat">
-                                <input class="form-control form-control-sm" @bind="_renameText" @bind:event="oninput"
-                                       @onkeydown="e => OnRenameKeyAsync(e, c.Id)" aria-label="Chat title" />
-                                <button type="button" class="btn btn-sm btn-primary" @onclick="() => RenameAsync(c.Id)" disabled="@string.IsNullOrWhiteSpace(_renameText)">Save</button>
-                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelRename">Cancel</button>
-                            </span>
-                        }
-                        else
-                        {
-                            <NavLink class="nav-link flex-grow-1 text-truncate small" href="@($"chat/{c.Id}")" title="@c.Title">
-                                <i class="bi bi-chat-left-text me-2" aria-hidden="true"></i>@c.Title
-                            </NavLink>
-                            <button type="button" class="btn btn-sm btn-link text-body-secondary p-1" title="Rename chat" aria-label="Rename chat"
-                                    @onclick="() => BeginRename(c)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
-                            <button type="button" class="btn btn-sm btn-link text-body-secondary p-1" title="Delete chat" aria-label="Delete chat"
-                                    @onclick="() => _pendingDelete = c.Id"><i class="bi bi-trash" aria-hidden="true"></i></button>
-                        }
-                    </div>
+                    @Row(c)
+                }
+                @if (_conversations.Any(c => c.Archived))
+                {
+                    <button type="button" class="btn btn-sm btn-link text-body-secondary text-decoration-none text-start px-2 mt-1"
+                            @onclick="() => _showArchived = !_showArchived" aria-expanded="@_showArchived" aria-controls="archived-chats">
+                        <i class="bi bi-archive me-2" aria-hidden="true"></i>Archived (@_conversations.Count(c => c.Archived))
+                        <i class="bi @(_showArchived ? "bi-chevron-up" : "bi-chevron-down") ms-1" aria-hidden="true"></i>
+                    </button>
+                    @if (_showArchived)
+                    {
+                        <div id="archived-chats" class="d-flex flex-column gap-1">
+                            @foreach (var c in _conversations.Where(c => c.Archived))
+                            {
+                                @Row(c)
+                            }
+                        </div>
+                    }
                 }
                 @if (_renameError is not null)
                 {
@@ -79,6 +68,51 @@
     private Guid? _renaming;
     private string _renameText = "";
     private string? _renameError;
+    private bool _showArchived;
+
+    /// <summary>
+    /// One sidebar row: the link, or the inline delete confirmation / rename box, plus an actions menu. The menu is
+    /// a Bootstrap dropdown positioned "fixed" so the scrolling list does not clip it. Archived rows are dimmed.
+    /// </summary>
+    private RenderFragment<ConversationSummary> Row => c =>
+        @<div class="d-flex align-items-center @(c.Archived ? "opacity-75" : "")">
+            @if (_pendingDelete == c.Id)
+            {
+                <span class="d-flex align-items-center gap-2 w-100 px-2 small" role="alertdialog" aria-label="Delete this chat?">
+                    <span class="flex-grow-1">Delete?</span>
+                    <button type="button" class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(c.Id)">Delete</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelDelete">Keep</button>
+                </span>
+            }
+            else if (_renaming == c.Id)
+            {
+                <span class="d-flex align-items-center gap-2 w-100 px-2" role="group" aria-label="Rename chat">
+                    <input class="form-control form-control-sm" @bind="_renameText" @bind:event="oninput"
+                           @onkeydown="e => OnRenameKeyAsync(e, c.Id)" aria-label="Chat title" />
+                    <button type="button" class="btn btn-sm btn-primary" @onclick="() => RenameAsync(c.Id)" disabled="@string.IsNullOrWhiteSpace(_renameText)">Save</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelRename">Cancel</button>
+                </span>
+            }
+            else
+            {
+                <NavLink class="nav-link flex-grow-1 text-truncate small" href="@($"chat/{c.Id}")" title="@c.Title">
+                    <i class="bi @(c.Pinned ? "bi-pin-angle-fill" : c.Archived ? "bi-archive" : "bi-chat-left-text") me-2" aria-hidden="true"></i>@c.Title
+                </NavLink>
+                <div class="dropdown">
+                    <button type="button" class="btn btn-sm btn-link text-body-secondary p-1" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}'
+                            aria-expanded="false" title="Chat actions" aria-label="Actions for @c.Title">
+                        <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow small">
+                        <li><button type="button" class="dropdown-item" @onclick="() => SetPinnedAsync(c, !c.Pinned)"><i class="bi @(c.Pinned ? "bi-pin-angle" : "bi-pin-angle-fill") me-2" aria-hidden="true"></i>@(c.Pinned ? "Unpin" : "Pin to top")</button></li>
+                        <li><button type="button" class="dropdown-item" @onclick="() => BeginRename(c)"><i class="bi bi-pencil me-2" aria-hidden="true"></i>Rename</button></li>
+                        <li><button type="button" class="dropdown-item" @onclick="() => SetArchivedAsync(c, !c.Archived)"><i class="bi @(c.Archived ? "bi-box-arrow-up" : "bi-archive") me-2" aria-hidden="true"></i>@(c.Archived ? "Unarchive" : "Archive")</button></li>
+                        <li><hr class="dropdown-divider" /></li>
+                        <li><button type="button" class="dropdown-item text-danger" @onclick="() => _pendingDelete = c.Id"><i class="bi bi-trash me-2" aria-hidden="true"></i>Delete</button></li>
+                    </ul>
+                </div>
+            }
+        </div>;
 
     private IJSObjectReference? _js;
 
@@ -133,6 +167,38 @@
         });
 
     private void CancelDelete() => _pendingDelete = null;
+
+    private async Task SetPinnedAsync(ConversationSummary c, bool pinned)
+    {
+        try
+        {
+            await Store.SetPinnedAsync(c.Id, pinned);
+            Events.NotifyChanged();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _renameError = ex.Message;
+        }
+    }
+
+    private async Task SetArchivedAsync(ConversationSummary c, bool archived)
+    {
+        try
+        {
+            await Store.SetArchivedAsync(c.Id, archived);
+            if (archived)
+            {
+                _showArchived = false; // it went into the folded section; unfolding it on every archive would be noisy
+            }
+            Events.NotifyChanged();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _renameError = ex.Message;
+        }
+    }
 
     private void BeginRename(ConversationSummary c)
     {
