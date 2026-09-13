@@ -21,6 +21,7 @@
 @inject TranscriptionService Transcription
 @inject ISettingsStore Settings
 @inject SettingsEvents SettingsEvents
+@inject PersonaEvents PersonaEvents
 
 <PageTitle>@(_title is null ? "ButterKnife" : $"{_title} · ButterKnife")</PageTitle>
 
@@ -663,6 +664,7 @@
         ConnectionEvents.Changed += OnConnectionsChanged;
         Events.Changed += OnConversationsChanged;
         SettingsEvents.Changed += OnSettingsChanged;
+        PersonaEvents.Changed += OnPersonasChanged;
 
         // Local data first so the page renders at once; the model list can take a while when a connection is down,
         // so it loads in the background and ReconcileSelection applies the saved model when it arrives.
@@ -704,6 +706,19 @@
         _ = InvokeAsync(async () =>
         {
             await LoadDisplayNameAsync();
+            StateHasChanged();
+        });
+
+    /// <summary>Settings → Personas changed something: refresh the picker; a deleted persona leaves the chat with none (the store did the same).</summary>
+    private void OnPersonasChanged() =>
+        _ = InvokeAsync(async () =>
+        {
+            await LoadPersonasAsync();
+            if (SelectedPersona is null)
+            {
+                _personaKey = "";
+                _showPersonaPrompt = false;
+            }
             StateHasChanged();
         });
 
@@ -1728,6 +1743,7 @@
         ConnectionEvents.Changed -= OnConnectionsChanged;
         Events.Changed -= OnConversationsChanged;
         SettingsEvents.Changed -= OnSettingsChanged;
+        PersonaEvents.Changed -= OnPersonasChanged;
         if (_js is not null && _dictation == DictationState.Recording)
         {
             try

@@ -1,0 +1,265 @@
+@* Personas section: the list on the left, an add/edit form on the right. Built-in personas can be edited (and put
+   back to their shipped text) but not deleted; deleting a custom one leaves its conversations without a persona. *@
+@implements IDisposable
+@inject IPersonaStore Store
+@inject PersonaEvents Events
+
+<h1 class="h4">Personas</h1>
+<p class="text-muted">A persona is the system prompt sent with a chat: who the model should be and how it should answer. Pick one per chat in the header.</p>
+
+<div class="row g-4">
+    <div class="col-lg-6">
+        @if (_personas.Count == 0)
+        {
+            <p class="text-muted">No personas yet. Add one on the right.</p>
+        }
+        else
+        {
+            <div class="list-group">
+                @foreach (var p in _personas)
+                {
+                    <div class="list-group-item @(p.Id == _editingId ? "active" : "")">
+                        <div class="d-flex align-items-start gap-2">
+                            <div class="flex-grow-1 min-w-0">
+                                <div class="fw-semibold">
+                                    @p.Name
+                                    @if (p.IsBuiltIn)
+                                    {
+                                        <span class="badge text-bg-secondary ms-1 fw-normal" title="Shipped with ButterKnife; can be edited, not deleted">built-in</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-primary ms-1 fw-normal">custom</span>
+                                    }
+                                </div>
+                                <div class="small @(p.Id == _editingId ? "" : "text-body-secondary")">@p.Description</div>
+                            </div>
+                            @if (_pendingDelete == p.Id)
+                            {
+                                <span class="d-flex align-items-center gap-1 small" role="alertdialog" aria-label="Delete this persona?">
+                                    Delete?
+                                    <button type="button" class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(p.Id)" disabled="@_busy">Delete</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _pendingDelete = null">Keep</button>
+                                </span>
+                            }
+                            else
+                            {
+                                <button type="button" class="btn btn-sm btn-link p-1 @(p.Id == _editingId ? "text-white" : "text-body-secondary")" title="Edit" aria-label="Edit @p.Name" @onclick="() => BeginEdit(p)" disabled="@_busy">
+                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                </button>
+                                @if (!p.IsBuiltIn)
+                                {
+                                    <button type="button" class="btn btn-sm btn-link p-1 @(p.Id == _editingId ? "text-white" : "text-body-secondary")" title="Delete" aria-label="Delete @p.Name" @onclick="() => _pendingDelete = p.Id" disabled="@_busy">
+                                        <i class="bi bi-trash" aria-hidden="true"></i>
+                                    </button>
+                                }
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        @if (_listMessage is not null)
+        {
+            <div class="small mt-2 @(_listOk ? "text-success" : "text-danger")" role="status">@_listMessage</div>
+        }
+    </div>
+
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-body">
+                <h2 class="h6 card-title">@(_editingId is null ? "New persona" : $"Edit {_editingName}")</h2>
+
+                <div class="mb-2">
+                    <label class="form-label small mb-0" for="p-name">Name</label>
+                    <input id="p-name" class="form-control form-control-sm" @bind="_name" @bind:event="oninput" maxlength="@MaxNameLength" disabled="@_busy" />
+                </div>
+                <div class="mb-2">
+                    <label class="form-label small mb-0" for="p-description">Description <span class="text-muted">(shown in the picker's tooltip)</span></label>
+                    <input id="p-description" class="form-control form-control-sm" @bind="_description" @bind:event="oninput" maxlength="@MaxDescriptionLength" disabled="@_busy" />
+                </div>
+                <div class="mb-3">
+                    <label class="form-label small mb-0" for="p-prompt">System prompt</label>
+                    <textarea id="p-prompt" class="form-control form-control-sm" rows="9" @bind="_prompt" @bind:event="oninput" disabled="@_busy"
+                              placeholder="You are a ... Answer ..."></textarea>
+                    <div class="form-text">Sent at the start of every request in chats that use this persona. Applies to later turns of existing chats too.</div>
+                </div>
+
+                @if (Problem is { } problem)
+                {
+                    <div class="small text-warning-emphasis mb-2">@problem</div>
+                }
+
+                <div class="d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-sm btn-primary" @onclick="SaveAsync" disabled="@(_busy || Problem is not null || !Dirty)">@(_editingId is null ? "Add" : "Save")</button>
+                    @if (_editingId is not null)
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelEdit" disabled="@_busy">Cancel</button>
+                    }
+                    @if (ShippedText is { } shipped && (shipped.Name != _name || shipped.Description != _description || shipped.SystemPrompt != _prompt))
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" @onclick="RestoreShipped" disabled="@_busy" title="Put the shipped text back into the form">Restore original</button>
+                    }
+                </div>
+
+                @if (_formMessage is not null)
+                {
+                    <div class="small mt-2 @(_formOk ? "text-success" : "text-danger")" role="status">@_formMessage</div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const int MaxNameLength = 60;
+    private const int MaxDescriptionLength = 200;
+
+    private IReadOnlyList<Persona> _personas = [];
+    private Guid? _editingId;
+    private string _editingName = "";
+    private string _savedName = "";
+    private string _savedDescription = "";
+    private string _savedPrompt = "";
+    private string _name = "";
+    private string _description = "";
+    private string _prompt = "";
+    private Guid? _pendingDelete;
+    private bool _busy;
+    private string? _formMessage;
+    private bool _formOk;
+    private string? _listMessage;
+    private bool _listOk;
+
+    private bool Dirty => _name.Trim() != _savedName || _description.Trim() != _savedDescription || _prompt.Trim() != _savedPrompt;
+
+    private string? Problem =>
+        string.IsNullOrWhiteSpace(_name) ? "Give the persona a name."
+        : string.IsNullOrWhiteSpace(_prompt) ? "Write the system prompt."
+        : _personas.Any(p => p.Id != _editingId && string.Equals(p.Name, _name.Trim(), StringComparison.OrdinalIgnoreCase)) ? "Another persona already has that name."
+        : null;
+
+    /// <summary>The text a built-in persona shipped with, so an edit can be undone.</summary>
+    private DefaultPersonas.Seed? ShippedText => _editingId is { } id ? DefaultPersonas.All.FirstOrDefault(s => s.Id == id) : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Events.Changed += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _personas = await Store.ListAsync();
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private void BeginEdit(Persona p)
+    {
+        _editingId = p.Id;
+        _editingName = p.Name;
+        _name = _savedName = p.Name;
+        _description = _savedDescription = p.Description;
+        _prompt = _savedPrompt = p.SystemPrompt;
+        _pendingDelete = null;
+        _formMessage = null;
+    }
+
+    private void CancelEdit()
+    {
+        _editingId = null;
+        _editingName = "";
+        _name = _savedName = "";
+        _description = _savedDescription = "";
+        _prompt = _savedPrompt = "";
+        _formMessage = null;
+    }
+
+    private void RestoreShipped()
+    {
+        if (ShippedText is { } shipped)
+        {
+            _name = shipped.Name;
+            _description = shipped.Description;
+            _prompt = shipped.SystemPrompt;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (Problem is not null || _busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _formMessage = null;
+        try
+        {
+            var name = _name.Trim();
+            var description = _description.Trim();
+            var prompt = _prompt.Trim();
+            if (_editingId is { } id)
+            {
+                await Store.UpdateAsync(id, name, description, prompt);
+                _formOk = true;
+                _formMessage = $"Saved {name}.";
+                _editingName = name;
+                _savedName = name;
+                _savedDescription = description;
+                _savedPrompt = prompt;
+            }
+            else
+            {
+                var created = await Store.CreateAsync(name, description, prompt);
+                CancelEdit();
+                _formOk = true;
+                _formMessage = $"Added {created.Name}. It is now in the persona picker of every chat.";
+            }
+            await LoadAsync();
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _formOk = false;
+            _formMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        _busy = true;
+        _listMessage = null;
+        try
+        {
+            var name = _personas.FirstOrDefault(p => p.Id == id)?.Name ?? "persona";
+            await Store.DeleteAsync(id);
+            if (_editingId == id)
+            {
+                CancelEdit();
+            }
+            _pendingDelete = null;
+            await LoadAsync();
+            _listOk = true;
+            _listMessage = $"Deleted {name}. Chats that used it now have no persona.";
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _listOk = false;
+            _listMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    public void Dispose() => Events.Changed -= OnChanged;
+}

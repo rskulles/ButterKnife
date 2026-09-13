@@ -17,6 +17,7 @@ public static class DataServiceCollectionExtensions
         services.AddSingleton<ConversationEvents>();
         services.AddSingleton<ConnectionEvents>();
         services.AddSingleton<SettingsEvents>();
+        services.AddSingleton<PersonaEvents>();
         return services;
     }
 }
