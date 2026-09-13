@@ -23,7 +23,7 @@
 
 <PageTitle>@(_title is null ? "ButterKnife" : $"{_title} · ButterKnife")</PageTitle>
 
-<div class="chat-frame d-flex flex-column gap-2 flex-grow-1">
+<div class="chat-frame d-flex flex-column gap-2 flex-grow-1" @ref="_chatFrameElement">
     <header class="d-flex flex-wrap align-items-center gap-2">
         <PhoneLink />
         <label class="visually-hidden" for="persona-select">Persona</label>
@@ -410,6 +410,7 @@
 
     private ElementReference _messagesElement;
     private ElementReference _inputElement;
+    private ElementReference _chatFrameElement;
 
     private IJSObjectReference? _js;
     private DotNetObjectReference<Chat>? _self;
@@ -560,6 +561,7 @@
             _self = DotNetObjectReference.Create(this);
             // The textarea element survives re-renders (only its attributes change), so one wiring is enough.
             await _js.InvokeVoidAsync("wireInput", _inputElement, _self);
+            await _js.InvokeVoidAsync("wireImageInput", _chatFrameElement, _inputElement, _self);
 
             // Per-browser overrides of the dictation defaults.
             var prefs = await _js.InvokeAsync<DictationPrefs?>("loadDictationPrefs");
@@ -1193,6 +1195,61 @@
             {
                 _imageError = $"{file.Name}: {ex.Message}";
             }
+        }
+    }
+
+    /// <summary>
+    /// An image pasted into the composer or dropped on the chat. JS has already bounded it (large or unusual formats
+    /// become a JPEG) and holds the bytes; they are pulled here as a stream, the same way dictation audio is.
+    /// </summary>
+    [JSInvokable]
+    public async Task OnImagePasted(string name, string mediaType, long byteLength)
+    {
+        if (_js is null)
+        {
+            return;
+        }
+
+        var reference = await _js.InvokeAsync<IJSStreamReference>("takeDroppedImage");
+        try
+        {
+            _imageError = null;
+            if (_isStreaming)
+            {
+                return;
+            }
+            if (ModelIsTextOnly)
+            {
+                _imageError = $"{Selected?.Model} cannot see images.";
+                return;
+            }
+            if (_pendingImages.Count >= MaxImages)
+            {
+                _imageError = $"At most {MaxImages} images per message.";
+                return;
+            }
+            if (byteLength == 0 || !mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                _imageError = $"{name} is not an image.";
+                return;
+            }
+
+            await using var stream = await reference.OpenReadStreamAsync(MaxImageBytes, _disposed.Token);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, _disposed.Token);
+            _pendingImages.Add(new ChatImage(mediaType, buffer.ToArray()));
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _imageError = $"{name}: {ex.Message}";
+        }
+        finally
+        {
+            await reference.DisposeAsync();
+            await InvokeAsync(StateHasChanged);
         }
     }
 

@@ -6,6 +6,13 @@
     min-height: 0;
 }
 
+/* While an image is dragged over the chat. */
+.chat-frame.drop-target {
+    outline: 2px dashed var(--bs-primary);
+    outline-offset: -4px;
+    border-radius: 0.375rem;
+}
+
 /* Flex child that scrolls: needs a zero basis and min-height so it shrinks instead of growing the page. */
 .chat-messages {
     flex: 1 1 0;

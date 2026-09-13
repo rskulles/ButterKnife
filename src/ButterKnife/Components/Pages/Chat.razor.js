@@ -16,6 +16,84 @@ export function wireInput(textarea, component) {
     });
 }
 
+// ---- Images from the clipboard or drag-and-drop -------------------------------------------------
+// Pasting into the composer or dropping onto the chat hands image files here. Large or unusual formats are
+// re-encoded as a bounded JPEG (same rule as the file picker), the bytes wait in a queue, .NET is told, and it
+// pulls them with takeDroppedImage() as a stream (the SignalR message limit is far below an image).
+const droppedImages = [];
+const RESIZE_ABOVE_BYTES = 1_500_000;
+const MAX_DIMENSION = 1568;
+const SUPPORTED = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+export function wireImageInput(dropZone, textarea, component) {
+    if (!dropZone || dropZone.dataset.imageWired === "1") {
+        return;
+    }
+    dropZone.dataset.imageWired = "1";
+
+    textarea?.addEventListener("paste", (e) => {
+        const files = [...(e.clipboardData?.items ?? [])]
+            .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+            .map((item) => item.getAsFile())
+            .filter(Boolean);
+        if (files.length) {
+            e.preventDefault();
+            ingestImages(files, component);
+        }
+    });
+
+    let depth = 0;
+    dropZone.addEventListener("dragenter", (e) => { if (hasFiles(e)) { e.preventDefault(); depth++; dropZone.classList.add("drop-target"); } });
+    dropZone.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
+    dropZone.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; dropZone.classList.remove("drop-target"); } });
+    dropZone.addEventListener("drop", (e) => {
+        if (!hasFiles(e)) {
+            return;
+        }
+        e.preventDefault();
+        depth = 0;
+        dropZone.classList.remove("drop-target");
+        ingestImages([...e.dataTransfer.files].filter((f) => f.type.startsWith("image/")), component);
+    });
+}
+
+function hasFiles(e) {
+    return [...(e.dataTransfer?.types ?? [])].includes("Files");
+}
+
+async function ingestImages(files, component) {
+    for (const file of files) {
+        let bytes, type = file.type;
+        try {
+            if (file.size > RESIZE_ABOVE_BYTES || !SUPPORTED.has(type)) {
+                ({ bytes, type } = await toBoundedJpeg(file));
+            } else {
+                bytes = new Uint8Array(await file.arrayBuffer());
+            }
+        } catch {
+            bytes = new Uint8Array(0);
+        }
+        droppedImages.push(bytes);
+        await component.invokeMethodAsync("OnImagePasted", file.name || "pasted image", type, bytes.byteLength);
+    }
+}
+
+async function toBoundedJpeg(file) {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_DIMENSION / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+    return { bytes: new Uint8Array(await blob.arrayBuffer()), type: "image/jpeg" };
+}
+
+export function takeDroppedImage() {
+    return droppedImages.shift() ?? new Uint8Array(0);
+}
+
 // Code blocks in rendered replies: syntax highlighting (highlight.js, loaded in App.razor) and a copy button.
 // Called from .NET once a transcript settles (load, reply finished); already-enhanced blocks are skipped, and a
 // block Blazor re-renders comes back without the marker, so it is enhanced again.
