@@ -22,6 +22,10 @@ public static class LlmServiceCollectionExtensions
         // Generations can run for minutes; cancellation is driven by the caller's token instead of a timeout.
         services.AddHttpClient(LlmClientBase.HttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
 
+        // "Find servers on my network": short timeout, since identification hits many addresses in a row.
+        services.AddHttpClient(LanScanner.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(3));
+        services.AddSingleton<LanScanner>();
+
         services.AddSingleton<ILlmClientRegistry, LlmClientRegistry>();
         services.AddSingleton<ModelCatalog>();
         services.AddSingleton<MarkdownRenderer>();

@@ -13,6 +13,7 @@ public partial class ConnectionsSettings : IDisposable
     [Inject] private ConnectionEvents Events { get; set; } = default!;
     [Inject] private IHttpClientFactory HttpClientFactory { get; set; } = default!;
     [Inject] private TranscriptionClient Transcription { get; set; } = default!;
+    [Inject] private LanScanner Scanner { get; set; } = default!;
 
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(20);
 
@@ -28,6 +29,12 @@ public partial class ConnectionsSettings : IDisposable
     private bool _formOk;
     private bool _busy;
 
+    private bool _scanning;
+    private ScanProgress _scanProgress;
+    private IReadOnlyList<FoundServer>? _found;
+    private string? _scanMessage;
+    private CancellationTokenSource? _scanCts;
+
     protected override async Task OnInitializedAsync()
     {
         Events.Changed += OnChanged;
@@ -41,6 +48,87 @@ public partial class ConnectionsSettings : IDisposable
         await LoadAsync();
         StateHasChanged();
     });
+
+    /// <summary>Runs the network scan, rendering progress at most a few times a second.</summary>
+    private async Task ScanAsync()
+    {
+        if (_scanning)
+        {
+            return;
+        }
+
+        _scanning = true;
+        _found = null;
+        _scanMessage = null;
+        _scanProgress = default;
+        _scanCts = new CancellationTokenSource();
+        var lastRender = Environment.TickCount64;
+        var progress = new Progress<ScanProgress>(p =>
+        {
+            _scanProgress = p;
+            if (Environment.TickCount64 - lastRender > 150 || p.Done == p.Total)
+            {
+                lastRender = Environment.TickCount64;
+                StateHasChanged();
+            }
+        });
+
+        try
+        {
+            _found = await Scanner.ScanAsync(progress, _scanCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            _scanMessage = "Scan cancelled.";
+        }
+        catch (Exception ex)
+        {
+            _scanMessage = $"Scan failed: {ex.Message}";
+        }
+        finally
+        {
+            _scanning = false;
+            _scanCts.Dispose();
+            _scanCts = null;
+        }
+    }
+
+    private void CancelScan() => _scanCts?.Cancel();
+
+    private bool AlreadyAdded(FoundServer server) =>
+        _connections.Any(c => NormalizeUrl(c.BaseUrl) == NormalizeUrl(server.BaseUrl));
+
+    /// <summary>localhost and 127.0.0.1 are the same box; trailing slashes and case do not matter.</summary>
+    private static string NormalizeUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return url.Trim().TrimEnd('/').ToLowerInvariant();
+        }
+        var host = uri.IsLoopback ? "localhost" : uri.Host.ToLowerInvariant();
+        return $"{uri.Scheme}://{host}:{uri.Port}{uri.AbsolutePath.TrimEnd('/')}";
+    }
+
+    /// <summary>Fills the form with a found server; the user presses Add (or edits first).</summary>
+    private void UseFound(FoundServer server)
+    {
+        CancelEdit();
+        var name = server.Name;
+        if (_connections.Any(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            name = $"{server.Name} ({server.Host})";
+        }
+        _form = new ConnectionForm
+        {
+            Name = name,
+            Kind = server.Kind,
+            BaseUrl = server.BaseUrl,
+            DefaultModel = server.Models.FirstOrDefault() ?? "",
+        };
+        _fetchedModels = server.Models.ToList();
+        _presetHint = $"Found at {server.Host}:{server.Port}. Press Add to save it, or change the name first.";
+        _formMessage = null;
+    }
 
     private void ApplyPreset(ConnectionPreset preset)
     {
@@ -255,7 +343,13 @@ public partial class ConnectionsSettings : IDisposable
         _ => "",
     };
 
-    public void Dispose() => Events.Changed -= OnChanged;
+    public void Dispose()
+    {
+        _scanCts?.Cancel();
+        DisposeCore();
+    }
+
+    private void DisposeCore() => Events.Changed -= OnChanged;
 
     private sealed class ConnectionForm
     {

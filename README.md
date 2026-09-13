@@ -33,7 +33,8 @@ and start talking. Nothing leaves the house.
 ButterKnife pops open in your browser. On Windows and Linux everything it saves sits in a `data` folder next to the
 program, so backing it up or moving it is a copy and paste. On a Mac it's in `~/Library/Application Support/ButterKnife`.
 
-**2. Point it at a model.** Go to **Settings → Connections**, pick a preset, type the address, hit *Test*, save.
+**2. Point it at a model.** Go to **Settings → Connections** and press *Find servers on my network*; anything that
+answers gets an *Add* button. Or pick a preset, type the address, hit *Test*, save.
 
 - **Ollama** only talks to its own machine unless you tell it otherwise: set `OLLAMA_HOST=0.0.0.0` on that computer.
   The address is just the server, like `http://ollama.local:11434`.
