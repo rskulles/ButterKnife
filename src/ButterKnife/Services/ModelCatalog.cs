@@ -9,9 +9,12 @@ public sealed record ModelDescriptor(Guid ConnectionId, string ConnectionName, s
     public override string ToString() => $"{Model}  ({ConnectionName})";
 }
 
+/// <summary>A connection whose model list could not be fetched, with the error it gave.</summary>
+public sealed record UnreachableConnection(Guid ConnectionId, string ConnectionName, string Message);
+
 public sealed record ModelCatalogResult(
     IReadOnlyList<ModelDescriptor> Models,
-    IReadOnlyDictionary<string, string> BackendErrors);
+    IReadOnlyList<UnreachableConnection> Unreachable);
 
 /// <summary>Asks every connection what it can serve. A connection that is down is reported, not fatal.</summary>
 public sealed class ModelCatalog(ILlmClientRegistry registry, ILogger<ModelCatalog> logger)
@@ -48,10 +51,11 @@ public sealed class ModelCatalog(ILlmClientRegistry registry, ILogger<ModelCatal
                 IsDefault: string.Equals(m, r.Client.DefaultModel, StringComparison.OrdinalIgnoreCase))))
             .ToArray();
 
-        var errors = results
+        var unreachable = results
             .Where(r => r.Error is not null)
-            .ToDictionary(r => r.Client.BackendName, r => r.Error!, StringComparer.OrdinalIgnoreCase);
+            .Select(r => new UnreachableConnection(r.Client.ConnectionId, r.Client.BackendName, r.Error!))
+            .ToArray();
 
-        return new ModelCatalogResult(models, errors);
+        return new ModelCatalogResult(models, unreachable);
     }
 }

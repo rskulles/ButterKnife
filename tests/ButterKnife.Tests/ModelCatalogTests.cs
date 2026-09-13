@@ -17,8 +17,10 @@ public class ModelCatalogTests
         Assert.Equal(
             [new ModelDescriptor(healthy.ConnectionId, "Healthy", "b", false), new ModelDescriptor(healthy.ConnectionId, "Healthy", "a", true)],
             result.Models);
-        Assert.Single(result.BackendErrors);
-        Assert.Contains("connection refused", result.BackendErrors["Broken"]);
+        var down = Assert.Single(result.Unreachable);
+        Assert.Equal(broken.ConnectionId, down.ConnectionId);
+        Assert.Equal("Broken", down.ConnectionName);
+        Assert.Contains("connection refused", down.Message);
         Assert.Equal($"{healthy.ConnectionId:D}::a", result.Models[1].Key);
     }
 

@@ -78,17 +78,17 @@
     }
 
 
-    @foreach (var (backend, message) in _backendErrors)
+    @foreach (var down in _unreachable)
     {
         <div class="alert alert-warning py-1 px-2 small mb-1" role="alert">
-            <strong>@backend</strong> unreachable: @message
+            <strong>@down.ConnectionName</strong> unreachable: @down.Message
         </div>
     }
 
     <div class="chat-messages overflow-auto p-2 border bg-body" @ref="_messagesElement">
         @if (_turns.Count == 0)
         {
-            @if (!_loadingModels && _models.Count == 0 && _backendErrors.Count == 0)
+            @if (!_loadingModels && _models.Count == 0 && _unreachable.Count == 0)
             {
                 <p class="text-center text-body-secondary mt-5">No LLM connections yet. <a href="settings/connections">Add a connection</a> to get started.</p>
             }
@@ -387,16 +387,47 @@
             <div class="input-group input-group-sm position-relative">
 
                 <label class="visually-hidden" for="model-select">Model</label>
-                @* While the list is empty the saved key matches no option, so bind the placeholder instead of a blank. *@
+                @* While the list is empty the saved key matches no option, so bind the placeholder instead of a blank.
+                   Models are grouped by connection once there is more than one; a connection that did not answer is
+                   listed too, greyed out, so it is obvious which box is down (and a chat saved on it keeps its model
+                   selected there rather than silently moving to another box). *@
                 <select id="model-select" class="form-select"
-                        value="@(_models.Count == 0 ? "" : _selectedKey)" @onchange="OnModelChanged" disabled="@_isStreaming">
-                    @if (_models.Count == 0)
+                        value="@(_models.Count == 0 && SelectedUnreachable is null ? "" : _selectedKey)" @onchange="OnModelChanged" disabled="@_isStreaming">
+                    @if (_models.Count == 0 && SelectedUnreachable is null)
                     {
                         <option value="">@(_loadingModels ? "Loading models…" : "No models available")</option>
                     }
-                    @foreach (var m in _models)
+                    @if (GroupModelsByConnection)
                     {
-                        <option value="@m.Key">@m</option>
+                        @foreach (var group in _models.GroupBy(m => m.ConnectionId))
+                        {
+                            <optgroup label="@group.First().ConnectionName">
+                                @foreach (var m in group)
+                                {
+                                    <option value="@m.Key">@m.Model</option>
+                                }
+                            </optgroup>
+                        }
+                    }
+                    else
+                    {
+                        @foreach (var m in _models)
+                        {
+                            <option value="@m.Key">@m</option>
+                        }
+                    }
+                    @foreach (var down in _unreachable)
+                    {
+                        <optgroup label="@($"{down.ConnectionName} (unreachable)")" title="@down.Message" class="text-body-secondary">
+                            @if (SelectedUnreachable == down)
+                            {
+                                <option value="@_selectedKey" disabled>@SelectedModelName</option>
+                            }
+                            else
+                            {
+                                <option value="" disabled>@Truncate(down.Message, 80)</option>
+                            }
+                        </optgroup>
                     }
                 </select>
                 <button class="btn btn-secondary" @onclick="RefreshModelsAsync"
@@ -478,7 +509,7 @@
     private Guid? _conversationId;
     private string? _title;
     private List<ModelDescriptor> _models = [];
-    private IReadOnlyDictionary<string, string> _backendErrors = new Dictionary<string, string>();
+    private IReadOnlyList<UnreachableConnection> _unreachable = [];
     private string _selectedKey = "";
     private List<Persona> _personas = [];
     private string _personaKey = "";
@@ -525,6 +556,17 @@
     private bool CanSend => !_isStreaming && (!string.IsNullOrWhiteSpace(_input) || _pendingImages.Count > 0) && Selected is not null;
 
     private ModelDescriptor? Selected => _models.FirstOrDefault(m => m.Key == _selectedKey);
+
+    /// <summary>The connection the selected model lives on, when that connection did not answer the model list.</summary>
+    private UnreachableConnection? SelectedUnreachable =>
+        _unreachable.FirstOrDefault(d => _selectedKey.StartsWith(ModelDescriptor.MakeKey(d.ConnectionId, ""), StringComparison.Ordinal));
+
+    private string SelectedModelName => _selectedKey[(_selectedKey.IndexOf("::", StringComparison.Ordinal) + 2)..];
+
+    /// <summary>One connection reads better flat ("model (box)"); several read better as groups.</summary>
+    private bool GroupModelsByConnection => _models.Select(m => m.ConnectionId).Distinct().Count() + _unreachable.Count > 1;
+
+    private static string Truncate(string text, int max) => text.Length <= max ? text : text[..max].TrimEnd() + "…";
 
     private Persona? SelectedPersona => _personas.FirstOrDefault(p => p.Id.ToString() == _personaKey);
 
@@ -704,7 +746,7 @@
         {
             var result = await Catalog.GetModelsAsync(_disposed.Token);
             _models = result.Models.ToList();
-            _backendErrors = result.BackendErrors;
+            _unreachable = result.Unreachable;
             ReconcileSelection();
             _ = RefreshContextWindowAsync();
         }
@@ -730,15 +772,19 @@
     /// </summary>
     private void ReconcileSelection()
     {
-        if (_models.Count == 0 || Selected is not null)
+        if ((_models.Count == 0 && _unreachable.Count == 0) || Selected is not null)
         {
             return;
         }
 
+        if (SelectedUnreachable is not null)
+        {
+            return; // the box is down, not the model: keep the selection and let the picker say so
+        }
+
         if (_selectedKey.Length > 0)
         {
-            var model = _selectedKey[(_selectedKey.IndexOf("::", StringComparison.Ordinal) + 2)..];
-            _error = $"Model {model} is no longer available on its connection; pick another to continue.";
+            _error = $"Model {SelectedModelName} is no longer available on its connection; pick another to continue.";
         }
         _selectedKey = PickDefault()?.Key ?? "";
     }
