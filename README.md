@@ -51,21 +51,28 @@ page so only people who know it can open your chats from the Wi‑Fi; your own c
 ## What you get
 
 - **Personas.** Ready-made setups for the model: Assistant, Programmer, Writer, Teacher, Analyst, Product Describer,
-  Copywriter and more. Pick one per chat and tweak the wording if you like.
+  Copywriter and more. Pick one per chat, edit any of them or write your own under Settings → Personas.
+- **Tune it per chat.** Temperature, how long a reply may run, and thinking on or off for models that can reason
+  first. Add instructions that apply to just this chat on top of the persona.
 - **Two models, one question.** Compare mode answers each prompt with two models side by side. Keep the one you like.
+  Every reply shows which model wrote it and how fast.
 - **Pictures and files.** Drop, paste or attach up to six images per message for models that can see. If a model
   can't, ButterKnife says so and keeps the chat going. Text files and PDFs work with every model: their text goes
   to the model, and the chat shows a chip you can open to see what it read.
-- **Second chances.** Edit a message and resend it, regenerate a reply, continue one that got cut off, or branch a
-  chat off from any point and take it somewhere else.
+- **Second chances.** Edit a message and resend it, regenerate a reply, continue one that got cut off, retry a
+  request that failed, or branch a chat off from any point and take it somewhere else.
 - **Show your work.** Models that think out loud get a fold-out for their reasoning. Code comes highlighted with a
   copy button, and maths and diagrams render properly instead of as a wall of symbols.
 - **Read it to me.** Any reply can be read aloud by your browser.
 - **Talk instead of type.** The mic button listens, stops when you pause, and transcribes through your Whisper server,
   or through the browser's own speech recognition if you don't have one. From another device this needs an `https`
   address; that's the browser's rule, not ours.
-- **Search.** A box at the top of the chat list finds any message or title across every chat and jumps straight to
-  the message.
+- **Search, pin, archive.** A box at the top of the chat list finds any message or title across every chat and
+  jumps straight to the message. Pin the chats you keep coming back to; archive the ones you're done with.
+- **Keep it safe.** Back up everything to one file from Settings → Data and restore it here or on another computer.
+  Export any chat as Markdown. Settings tells you when a newer ButterKnife is out.
+- **Keyboard first, if you like.** Enter sends, Esc stops, Shift+Esc jumps to the message box, Ctrl/⌘+Shift+O starts
+  a new chat.
 - **Light, dark, or match the system.** Remembered per browser.
 - **Your name, not "User".** Set it once under Settings → General.
 
