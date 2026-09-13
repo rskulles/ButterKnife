@@ -17,6 +17,7 @@
 @inject IOptions<LlmOptions> LlmOptions
 @inject IOptions<DictationOptions> DictationOptions
 @inject ConversationCompactor Compactor
+@inject ChatTitler Titler
 @inject TranscriptionService Transcription
 @inject ISettingsStore Settings
 @inject SettingsEvents SettingsEvents
@@ -511,6 +512,9 @@
     private string _compareKey = "";
     private ModelDescriptor? CompareModel => _compareKey.Length > 0 ? _models.FirstOrDefault(m => m.Key == _compareKey) : null;
 
+    /// <summary>Set when a conversation is created; the first finished reply then asks the model for a proper title.</summary>
+    private bool _titlePending;
+
     private ElementReference _messagesElement;
     private ElementReference _inputElement;
     private ElementReference _chatFrameElement;
@@ -991,7 +995,50 @@
             await _js.InvokeVoidAsync("focus", _inputElement); // no token: after Stop it would already be cancelled and this call would throw
         }
 
+        if (_titlePending && continueTurn is null && !string.IsNullOrWhiteSpace(completedText))
+        {
+            _titlePending = false;
+            var prompt = history.LastOrDefault(m => m.Role == ChatRole.User)?.Content ?? "";
+            _ = SuggestTitleAsync(conversationId, model, prompt, completedText);
+        }
+
         await AfterReplyContextAsync(conversationId, model);
+    }
+
+    /// <summary>
+    /// Replaces the placeholder title (the first line of the prompt) with one the model suggests, in the background
+    /// after the first exchange. A rename in the meantime wins: the title is only written if the placeholder is still
+    /// what the store holds.
+    /// </summary>
+    private async Task SuggestTitleAsync(Guid conversationId, ModelDescriptor model, string prompt, string reply)
+    {
+        var placeholder = _title;
+        var suggested = await Titler.SuggestAsync(model.ConnectionId, model.Model, prompt, reply, _disposed.Token);
+        if (suggested is null || placeholder is null || suggested == placeholder || _disposed.IsCancellationRequested)
+        {
+            return;
+        }
+
+        try
+        {
+            var current = (await Store.ListAsync(_disposed.Token)).FirstOrDefault(c => c.Id == conversationId);
+            if (current is null || current.Title != placeholder)
+            {
+                return;
+            }
+            await Store.SetTitleAsync(conversationId, suggested, _disposed.Token);
+        }
+        catch (Exception)
+        {
+            return; // the placeholder title is fine
+        }
+
+        if (_conversationId == conversationId)
+        {
+            _title = suggested;
+        }
+        Events.NotifyChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
     /// <summary>Streams one model's answer into a turn (text, reasoning, finish, usage) without touching page state or the store.</summary>
@@ -1324,6 +1371,7 @@
         var conversation = await Store.CreateAsync(title, model.ConnectionId, model.Model, SelectedPersona?.Id, _disposed.Token);
         _conversationId = conversation.Id;
         _title = title;
+        _titlePending = true;
         Events.NotifyChanged();
         Nav.NavigateTo($"/chat/{conversation.Id}", replace: true); // same component instance; OnParametersSetAsync sees the id already loaded
         return conversation.Id;

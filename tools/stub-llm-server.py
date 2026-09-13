@@ -52,6 +52,7 @@ import re
 DELAY = 0.08
 WORDS = re.findall(r"\S+\s*|\s+", REPLY)
 CONTINUATION = re.findall(r"\S+\s*|\s+", "and here is the rest of the reply, continued from where it stopped.")
+TITLE = re.findall(r"\S+\s*|\s+", "\"Stub Title From The Model.\"")
 THINKING = re.findall(r"\S+\s*|\s+", "The user wants a markdown check. I should show a heading, some inline styles, a code block, a list, a table and a quote. ")
 
 class H(BaseHTTPRequestHandler):
@@ -101,13 +102,16 @@ class H(BaseHTTPRequestHandler):
         last = msgs[-1] if msgs else {}
         continuing = last.get("role") == "assistant"
         cut = (not continuing) and "[cut]" in str(last.get("content", ""))
+        # The chat page asks for a title after the first exchange (ChatTitler.Instruction); answer with a plain title
+        # and no thinking so the sidebar can be checked.
+        titling = (not continuing) and str(last.get("content", "")).startswith("Write a title")
         # Replies start with the model's name so two models answering side by side can be told apart.
-        words = CONTINUATION if continuing else ([f"_{body.get('model')}_ ", "says:\n\n"] + (WORDS[:6] if cut else WORDS))
+        words = CONTINUATION if continuing else TITLE if titling else ([f"_{body.get('model')}_ ", "says:\n\n"] + (WORDS[:6] if cut else WORDS))
         finish = "length" if cut else "stop"
         if self.path == "/api/chat":
             self.send_response(200); self.send_header("Content-Type", "application/x-ndjson"); self.end_headers()
             # Thinking models (Ollama 0.9+) stream their reasoning in message.thinking before the answer.
-            if not continuing:
+            if not continuing and not titling:
                 for w in THINKING:
                     self.wfile.write((json.dumps({"model": body["model"], "message": {"role": "assistant", "content": "", "thinking": w}, "done": False}) + "\n").encode()); self.wfile.flush(); time.sleep(DELAY)
             for w in words:
@@ -118,7 +122,7 @@ class H(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
             # fake-gpt thinks inline with <think> tags (as Qwen3 does through llama.cpp/LM Studio); other models use the
             # separated reasoning_content field (DeepSeek, vLLM).
-            if continuing:
+            if continuing or titling:
                 pass
             elif body.get("model") == "fake-gpt":
                 for w in ["<think>"] + THINKING + ["</think>"]:
