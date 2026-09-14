@@ -224,6 +224,13 @@
                                             disabled="@(_isStreaming || ModelIsTextOnly)" title="@(ModelIsTextOnly ? $"{Selected?.Model} cannot see images" : "Attach this picture to your next message")">
                                         <i class="bi bi-chat-square-dots me-1" aria-hidden="true"></i>Ask about this image
                                     </button>
+                                    @if (_imageConnection is not null)
+                                    {
+                                        <button type="button" class="btn btn-link btn-sm p-0 mt-1 ms-3 text-body-secondary" @onclick="() => RedrawImageAsync(image)"
+                                                disabled="@_isStreaming" title="Start a new picture from this one: attach it and type what should change after /image">
+                                            <i class="bi bi-brush me-1" aria-hidden="true"></i>Redraw this picture
+                                        </button>
+                                    }
                                 </div>
                             }
                         </div>
@@ -431,7 +438,7 @@
                 <div class="small @(_dictationError ? "text-danger" : "text-body-secondary")">@_dictationStatus</div>
             }
             <textarea @ref="_inputElement" class="form-control" rows="2" style="resize: none"
-                      placeholder="@(_pendingImages.Count > 0 ? "Ask about the image… (Enter to send)" : _pendingFiles.Count > 0 ? "Ask about the file… (Enter to send)" : _imageConnection is not null ? "Message… (Enter to send; /image to make a picture)" : "Message… (Enter to send, Shift+Enter for newline)")"
+                      placeholder="@(_pendingImages.Count > 0 ? (_imageConnection is not null ? "Ask about the image… or /image what should change (Enter to send)" : "Ask about the image… (Enter to send)") : _pendingFiles.Count > 0 ? "Ask about the file… (Enter to send)" : _imageConnection is not null ? "Message… (Enter to send; /image to make a picture)" : "Message… (Enter to send, Shift+Enter for newline)")"
                       @bind="_input" @bind:event="oninput" disabled="@_isStreaming"></textarea>
         </div>
         <div class="d-flex align-items-center gap-lg-5 gap-md-5 gap-sm-2 justify-content-evenly">
@@ -545,6 +552,14 @@
                                        @onchange="e => _imageStyleScale = double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 1.0" disabled="@(_imageStyle.Length == 0)" />
                             </div>
                             <div class="form-text">Applied to /image pictures; or name one in the text: <code>--lora @(_imageStyles[0]):0.8</code>. Not saved.</div>
+                        }
+                        @if (_imageConnection is not null)
+                        {
+                            <label class="form-label mt-3 mb-1" for="opt-image-strength">Redraw strength (@_imageConnection.Name)</label>
+                            <input type="range" class="form-range" id="opt-image-strength" min="0" max="1" step="0.05" value="@_imageStrength"
+                                   @oninput="e => _imageStrength = double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? Math.Clamp(v, 0, 1) : 0.6" />
+                            <div class="d-flex justify-content-between text-body-secondary" style="font-size: 0.75em"><span>keep the picture</span><span>@_imageStrength.ToString("0.##")</span><span>ignore it</span></div>
+                            <div class="form-text">For /image with a picture attached (image to image); or <code>--strength 0.4</code> in the text. Not saved.</div>
                         }
                         <div class="form-text mt-2">Saved with this chat.</div>
                     </div>
@@ -1087,23 +1102,35 @@
             return;
         }
 
-        if (_imageConnection is { } imageConnection && ImageCommand.TryParse(_input, out var imagePrompt, out var flagStyles))
+        if (_imageConnection is { } imageConnection && ImageCommand.TryParse(_input, out var imagePrompt, out var flagStyles, out var flagStrength))
         {
             if (imagePrompt.Length == 0)
             {
-                _imageError = "Describe the picture after /image.";
+                _imageError = _pendingImages.Count > 0 ? "Say what should change in the attached picture after /image." : "Describe the picture after /image.";
                 return;
             }
-            // Styles named in the text win; otherwise the one picked in the model settings popover applies.
+            if (_pendingImages.Count > 1)
+            {
+                _imageError = "Image to image takes one picture: keep the one to start from.";
+                return;
+            }
+            // Styles named in the text win; otherwise the one picked in the model settings popover applies. An attached
+            // picture makes it image to image, with --strength or the popover's strength.
             var styles = flagStyles.Count > 0 ? flagStyles
                 : _imageStyle.Length > 0 ? [new ImageStyle(_imageStyle, _imageStyleScale)]
                 : (IReadOnlyList<ImageStyle>)[];
+            var source = _pendingImages.FirstOrDefault();
             var draft = _input;
             _input = "";
+            _pendingImages.Clear();
             _imageError = null;
-            if (!await GenerateImageAsync(imageConnection, imagePrompt, styles))
+            if (!await GenerateImageAsync(imageConnection, imagePrompt, styles, source, flagStrength ?? _imageStrength))
             {
                 _input = draft;
+                if (source is not null)
+                {
+                    _pendingImages.Add(source);
+                }
             }
             return;
         }
@@ -2179,6 +2206,9 @@
     private string _imageStyle = "";
     private double _imageStyleScale = 1.0;
 
+    /// <summary>Image to image: how far a render may move from the attached picture (0 keeps it, 1 ignores it). Session-only.</summary>
+    private double _imageStrength = 0.6;
+
     private string GeneratedImageTitle(ChatImage image) => _imageSeeds.TryGetValue(image, out var seed) ? $"Seed {seed} · click to toggle size" : "Click to toggle size";
 
     private async Task LoadImageConnectionAsync()
@@ -2218,7 +2248,7 @@
     /// image connection rendered. Runs through the same streaming state as a text reply so Stop and the throbber
     /// work; the chat model is not involved (later turns see a short note in place of the pixels).
     /// </summary>
-    private async Task<bool> GenerateImageAsync(LlmConnection connection, string prompt, IReadOnlyList<ImageStyle> styles)
+    private async Task<bool> GenerateImageAsync(LlmConnection connection, string prompt, IReadOnlyList<ImageStyle> styles, ChatImage? source = null, double strength = 0.6)
     {
         _error = null;
         Guid conversationId;
@@ -2229,7 +2259,7 @@
             // default chat model, or with the image connection itself when no chat model is known yet.
             conversationId = _conversationId
                 ?? await EnsureConversationAsync(Selected ?? PickDefault() ?? new ModelDescriptor(connection.Id, connection.Name, connection.DefaultModel ?? "image", false), $"Image: {prompt}");
-            userMessageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.User, $"/image {prompt}"), _disposed.Token);
+            userMessageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.User, $"/image {prompt}", source is null ? null : [source]), _disposed.Token);
         }
         catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
         {
@@ -2240,7 +2270,7 @@
             _error = $"Could not save the message: {ex.Message}";
             return false;
         }
-        _turns.Add(new ChatTurn(ChatRole.User, $"/image {prompt}", Markdown) { MessageId = userMessageId, CreatedAt = DateTimeOffset.Now });
+        _turns.Add(new ChatTurn(ChatRole.User, $"/image {prompt}", Markdown, source is null ? null : [source]) { MessageId = userMessageId, CreatedAt = DateTimeOffset.Now });
 
         var reply = new ChatTurn(ChatRole.Assistant, "", Markdown) { ModelName = connection.Name, IsStreaming = true };
         _turns.Add(reply);
@@ -2252,10 +2282,11 @@
         ChatImage? picture = null;
         try
         {
-            var result = await ImageGen.GenerateAsync(connection, new ImageRequest(prompt, Styles: styles), token);
+            var result = await ImageGen.GenerateAsync(connection, new ImageRequest(prompt, Styles: styles, Source: source, Strength: strength), token);
             picture = new ChatImage("image/png", result.Png);
             var styleNote = styles.Count > 0 ? " + " + string.Join(", ", styles.Select(s => s.Scale == 1.0 ? s.Name : $"{s.Name} ×{s.Scale:0.##}")) : "";
-            reply.ModelName = (string.IsNullOrEmpty(result.Model) ? connection.Name : $"{result.Model} ({connection.Name})") + styleNote;
+            var sourceNote = source is null ? "" : $" · from picture, strength {result.SourceStrength ?? strength:0.##}";
+            reply.ModelName = (string.IsNullOrEmpty(result.Model) ? connection.Name : $"{result.Model} ({connection.Name})") + styleNote + sourceNote;
             if (result.Seed is { } seed)
             {
                 _imageSeeds[picture] = seed; // shown in the picture's tooltip this session; not stored
@@ -2298,6 +2329,22 @@
         _codeBlocksDirty = true;
         await RenderAndScrollAsync(force: true);
         return true;
+    }
+
+    /// <summary>Image to image from a generated picture: attach it as the only source and start the /image command.</summary>
+    private async Task RedrawImageAsync(ChatImage image)
+    {
+        _pendingImages.Clear();
+        _pendingImages.Add(image);
+        _imageError = null;
+        if (!ImageCommand.TryParse(_input, out _))
+        {
+            _input = "/image " + _input.TrimStart();
+        }
+        if (_js is not null)
+        {
+            await _js.InvokeVoidAsync("focus", _inputElement);
+        }
     }
 
     /// <summary>Puts a generated picture on the next message so a vision model can be asked about it.</summary>

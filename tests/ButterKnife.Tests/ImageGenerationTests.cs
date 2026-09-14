@@ -38,6 +38,45 @@ public sealed class ImageGenerationTests
     }
 
     [Fact]
+    public void CommandParsingPullsStrengthOutOfTheText()
+    {
+        Assert.True(ImageCommand.TryParse("/image make it night --strength 0.4 --lora sketch", out var prompt, out var styles, out var strength));
+        Assert.Equal("make it night", prompt);
+        Assert.Equal(0.4, strength);
+        Assert.Equal("sketch", Assert.Single(styles).Name);
+
+        Assert.True(ImageCommand.TryParse("/image plain --strength=7", out prompt, out _, out strength));
+        Assert.Equal("plain", prompt);
+        Assert.Equal(1.0, strength); // clamped
+
+        Assert.True(ImageCommand.TryParse("/image no flag", out _, out _, out strength));
+        Assert.Null(strength);
+    }
+
+    [Fact]
+    public async Task GenerateSendsTheSourcePictureAndStrengthWithoutASize()
+    {
+        var handler = StubHandler.Text("{\"created\":1,\"data\":[{\"b64_json\":\"AQID\",\"seed\":1}],\"crayoncloud\":{\"source\":{\"width\":512,\"height\":384,\"strength\":0.4}}}");
+        var client = new ImageGenerationClient(new StubClientFactory(handler, "http://crayon.test:8765/v1"));
+        var connection = TestConnections.Make("Crayon Cloud", BackendKind.ImageGeneration, "http://crayon.test:8765/v1");
+        var source = new ChatImage("image/png", [0x89, 0x50, 0x4E, 0x47]);
+
+        var result = await client.GenerateAsync(connection, new ImageRequest("make it night", Source: source, Strength: 0.4), CancellationToken.None);
+
+        var body = JsonDocument.Parse(handler.LastRequestBody!).RootElement;
+        Assert.Equal(source.DataUrl, body.GetProperty("image").GetString());
+        Assert.Equal(0.4, body.GetProperty("strength").GetDouble());
+        Assert.False(body.TryGetProperty("size", out _)); // the picture sets the shape
+        Assert.Equal(0.4, result.SourceStrength);
+
+        await client.GenerateAsync(connection, new ImageRequest("plain"), CancellationToken.None);
+        body = JsonDocument.Parse(handler.LastRequestBody!).RootElement;
+        Assert.Equal("1024x1024", body.GetProperty("size").GetString());
+        Assert.False(body.TryGetProperty("image", out _));
+        Assert.False(body.TryGetProperty("strength", out _));
+    }
+
+    [Fact]
     public async Task GenerateSendsStylesAsLoras()
     {
         var handler = StubHandler.Text("{\"created\":1,\"data\":[{\"b64_json\":\"AQID\",\"seed\":1}]}");

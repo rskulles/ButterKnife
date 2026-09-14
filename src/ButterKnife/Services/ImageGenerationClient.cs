@@ -10,11 +10,15 @@ namespace ButterKnife.Services;
 /// <summary>A style (LoRA) the image server offers by name, with the strength to apply it at.</summary>
 public sealed record ImageStyle(string Name, double Scale = 1.0);
 
-/// <summary>What the "/image" command asks for: a size in pixels and, optionally, steps, a seed and styles.</summary>
-public sealed record ImageRequest(string Prompt, int Width = 1024, int Height = 1024, int? Steps = null, int? Seed = null, IReadOnlyList<ImageStyle>? Styles = null);
+/// <summary>
+/// What the "/image" command asks for: a size in pixels, optionally steps, a seed and styles, and for image to image
+/// a <see cref="Source"/> picture with a <see cref="Strength"/> (A1111-style denoising: 0 keeps the picture, 1 ignores
+/// it; Crayon Cloud's default is 0.6). With a source the size is left to the server, which uses the picture's shape.
+/// </summary>
+public sealed record ImageRequest(string Prompt, int Width = 1024, int Height = 1024, int? Steps = null, int? Seed = null, IReadOnlyList<ImageStyle>? Styles = null, ChatImage? Source = null, double? Strength = null);
 
 /// <summary>A picture back from the server: PNG bytes plus what it reports about the render.</summary>
-public sealed record GeneratedImage(byte[] Png, int? Seed, double? Seconds, string? Model);
+public sealed record GeneratedImage(byte[] Png, int? Seed, double? Seconds, string? Model, double? SourceStrength = null);
 
 /// <summary>
 /// Talks to an image generation connection: the OpenAI images API (`POST {BaseUrl}/images/generations`, `b64_json`),
@@ -71,11 +75,13 @@ public sealed class ImageGenerationClient(IHttpClientFactory httpClientFactory)
 
         var body = new WireRequest(
             request.Prompt,
-            $"{request.Width}x{request.Height}",
+            request.Source is null ? $"{request.Width}x{request.Height}" : null, // a source picture sets the shape
             request.Steps,
             request.Seed,
             string.IsNullOrWhiteSpace(connection.DefaultModel) ? null : connection.DefaultModel,
-            request.Styles is { Count: > 0 } styles ? styles.Select(s => new WireLora(s.Name, s.Scale)).ToArray() : null);
+            request.Styles is { Count: > 0 } styles ? styles.Select(s => new WireLora(s.Name, s.Scale)).ToArray() : null,
+            request.Source?.DataUrl,
+            request.Source is null ? null : request.Strength);
         using var client = httpClientFactory.CreateClient(LlmClientBase.HttpClientName);
         using var http = new HttpRequestMessage(HttpMethod.Post, Resolve(connection, "images/generations"))
         {
@@ -97,7 +103,7 @@ public sealed class ImageGenerationClient(IHttpClientFactory httpClientFactory)
             throw new InvalidOperationException($"{connection.Name} returned no image data.");
         }
 
-        return new GeneratedImage(Convert.FromBase64String(b64), first.Seed, reply?.CrayonCloud?.Seconds, reply?.CrayonCloud?.Model);
+        return new GeneratedImage(Convert.FromBase64String(b64), first.Seed, reply?.CrayonCloud?.Seconds, reply?.CrayonCloud?.Model, reply?.CrayonCloud?.Source?.Strength);
     }
 
     private static Uri Resolve(LlmConnection connection, string path)
@@ -116,11 +122,13 @@ public sealed class ImageGenerationClient(IHttpClientFactory httpClientFactory)
 
     private sealed record WireRequest(
         string Prompt,
-        string Size,
+        string? Size,
         int? Steps,
         int? Seed,
         string? Model,
-        WireLora[]? Loras)
+        WireLora[]? Loras,
+        string? Image,
+        double? Strength)
     {
         [JsonPropertyName("response_format")] public string ResponseFormat => "b64_json";
         public int N => 1;
@@ -132,7 +140,9 @@ public sealed class ImageGenerationClient(IHttpClientFactory httpClientFactory)
 
     private sealed record WireImage([property: JsonPropertyName("b64_json")] string? B64Json, int? Seed);
 
-    private sealed record WireExtras(string? Model, double? Seconds);
+    private sealed record WireExtras(string? Model, double? Seconds, WireSource? Source);
+
+    private sealed record WireSource(int? Width, int? Height, double? Strength);
 }
 
 /// <summary>Finds the configured image generation connection (the first one of that kind) and renders through it.</summary>
@@ -166,10 +176,14 @@ public static partial class ImageCommand
 {
     private static readonly string[] Prefixes = ["/image", "/img", "/imagine"];
 
-    public static bool TryParse(string input, out string prompt) => TryParse(input, out prompt, out _);
+    public static bool TryParse(string input, out string prompt) => TryParse(input, out prompt, out _, out _);
 
-    public static bool TryParse(string input, out string prompt, out IReadOnlyList<ImageStyle> styles)
+    public static bool TryParse(string input, out string prompt, out IReadOnlyList<ImageStyle> styles) => TryParse(input, out prompt, out styles, out _);
+
+    /// <summary>Also pulls "--strength 0.4" out of the text (image to image only; ignored without a source picture).</summary>
+    public static bool TryParse(string input, out string prompt, out IReadOnlyList<ImageStyle> styles, out double? strength)
     {
+        strength = null;
         var text = input.TrimStart();
         foreach (var prefix in Prefixes)
         {
@@ -178,6 +192,16 @@ public static partial class ImageCommand
             {
                 var rest = text[prefix.Length..];
                 var found = new List<ImageStyle>();
+                double? strengthFlag = null;
+                rest = StrengthFlag().Replace(rest, m =>
+                {
+                    if (double.TryParse(m.Groups["value"].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v))
+                    {
+                        strengthFlag = Math.Clamp(v, 0, 1);
+                    }
+                    return " ";
+                });
+                strength = strengthFlag;
                 rest = LoraFlag().Replace(rest, m =>
                 {
                     var scale = m.Groups["scale"].Success && double.TryParse(m.Groups["scale"].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var s) ? s : 1.0;
@@ -196,4 +220,7 @@ public static partial class ImageCommand
 
     [System.Text.RegularExpressions.GeneratedRegex(@"(?:^|\s)--(?:lora|style)[ =](?<name>[^\s:]+)(?::(?<scale>-?\d+(?:\.\d+)?))?(?=\s|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
     private static partial System.Text.RegularExpressions.Regex LoraFlag();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?:^|\s)--strength[ =](?<value>\d*\.?\d+)(?=\s|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex StrengthFlag();
 }

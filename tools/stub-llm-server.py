@@ -98,11 +98,16 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/v1/images/generations":
             # Crayon Cloud / OpenAI images API: a small gradient PNG, after a pause that scales with --delay.
             body = json.loads(raw or b"{}")
-            print("POST /v1/images/generations", repr(body.get("prompt", ""))[:60], body.get("size"), "steps=%s seed=%s loras=%s" % (body.get("steps"), body.get("seed"), body.get("loras")), flush=True)
+            image = body.get("image")
+            src = None
+            if image:
+                # Image to image: any base64 (or data: URL) counts as a source; report a fake shape and the strength back.
+                src = {"width": 256, "height": 192, "strength": body.get("strength", 0.6)}
+            print("POST /v1/images/generations", repr(body.get("prompt", ""))[:60], body.get("size"), "steps=%s seed=%s loras=%s image=%s strength=%s" % (body.get("steps"), body.get("seed"), body.get("loras"), (len(image) if image else None), body.get("strength")), flush=True)
             time.sleep(DELAY * 20)
             seed = body.get("seed") if body.get("seed") is not None else 4242
             self._json({"created": int(time.time()), "data": [{"b64_json": base64.b64encode(fake_png(256, 256, seed)).decode(), "seed": seed}],
-                        "crayoncloud": {"model": "z-image-turbo", "engine": "stub", "width": 256, "height": 256, "steps": body.get("steps") or 8, "seconds": round(DELAY * 20, 1)}})
+                        "crayoncloud": {"model": "z-image-turbo", "engine": "stub", "width": 256, "height": 256, "steps": body.get("steps") or 8, "seconds": round(DELAY * 20, 1), "source": src}})
             return
         if self.path == "/inference":
             wav = raw.find(b"RIFF") >= 0 and raw.find(b"WAVE") >= 0

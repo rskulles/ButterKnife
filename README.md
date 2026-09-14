@@ -61,7 +61,9 @@ page so only people who know it can open your chats from the Wi‑Fi; your own c
   to the model, and the chat shows a chip you can open to see what it read.
 - **Pictures from a prompt.** Run [Crayon Cloud](https://github.com/rskulles/CrayonCloud) (or any server with the
   OpenAI images API) on a machine with a GPU, add it under Connections, and type `/image a lighthouse at dusk` in any
-  chat. The picture lands in the conversation, and one click hands it to a vision model for questions.
+  chat. The picture lands in the conversation, and one click hands it to a vision model for questions. Attach a
+  picture (or click "Redraw this picture" under one you made) and `/image make it night` starts from it; a strength
+  slider in the model settings says how far the redraw may stray.
 - **Second chances.** Edit a message and resend it, regenerate a reply, continue one that got cut off, retry a
   request that failed, or branch a chat off from any point and take it somewhere else.
 - **Show your work.** Models that think out loud get a fold-out for their reasoning. Code comes highlighted with a
