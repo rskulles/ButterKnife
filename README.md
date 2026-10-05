@@ -76,7 +76,9 @@ Wi‑Fi needs an account you make for them under **Settings → Users**, and the
 - **Search, pin, archive.** A box at the top of the chat list finds any message or title across every chat and
   jumps straight to the message. Pin the chats you keep coming back to; archive the ones you're done with.
 - **Room for the household.** Everyone who signs in from another device gets their own chats; nobody sees anyone
-  else's. Administrators look after connections, personas and users; everyone else just chats.
+  else's. Administrators look after connections, personas and users, and only from inside the house: from the
+  computer itself or a device on the home network. Over Tailscale or any other remote link, even an administrator
+  just chats.
 - **Keep it safe.** Back up everything to one file from Settings → Data and restore it here or on another computer.
   Export any chat as Markdown. Settings tells you when a newer ButterKnife is out.
 - **Keyboard first, if you like.** Enter sends, Esc stops, Shift+Esc jumps to the message box, Ctrl/⌘+Shift+O starts

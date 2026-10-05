@@ -7,21 +7,30 @@ using Microsoft.Extensions.Primitives;
 namespace ButterKnife.Services;
 
 /// <summary>
-/// Runs after cookie authentication. Requests from this computer that carry no sign-in become the owner. Anyone
-/// else without a valid cookie is sent to the login page (page requests: GET accepting HTML, with a return URL) or
-/// gets 401 (the SignalR circuit, the backup download, form posts). Static files and the login endpoints pass.
+/// Runs after cookie authentication. Requests from this computer that carry no sign-in become the owner. Every
+/// signed-in request is stamped with the zone its address falls in (this computer, the home network, remote), which
+/// decides whether an administrator may administer. Anyone else without a valid cookie is sent to the login page
+/// (page requests: GET accepting HTML, with a return URL) or gets 401 (the SignalR circuit, the backup download,
+/// form posts). Static files and the login endpoints pass.
 /// </summary>
 public sealed class LoginMiddleware(RequestDelegate next, LoginGate gate)
 {
     public async Task InvokeAsync(HttpContext context)
     {
-        if (context.User.Identity?.IsAuthenticated != true
-            && context.Connection.RemoteIpAddress is { } ip && LoginGate.IsLoopback(ip))
+        var address = context.Connection.RemoteIpAddress;
+        if (context.User.Identity?.IsAuthenticated != true && address is { } ip && LoginGate.IsLoopback(ip))
         {
             context.User = await gate.LocalPrincipalAsync(context.RequestAborted);
         }
 
-        if (context.User.Identity?.IsAuthenticated == true || LoginGate.IsExempt(context))
+        if (context.User.Identity?.IsAuthenticated == true)
+        {
+            LoginGate.StampZone(context.User, address is null ? NetworkZone.Remote : LoginGate.ZoneOf(address));
+            await next(context);
+            return;
+        }
+
+        if (LoginGate.IsExempt(context))
         {
             await next(context);
             return;

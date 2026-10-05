@@ -119,6 +119,48 @@ public sealed class LoginGateTests
     public void KnowsThisComputer(string ip, bool loopback) => Assert.Equal(loopback, LoginGate.IsLoopback(IPAddress.Parse(ip)));
 
     [Theory]
+    [InlineData("127.0.0.1", NetworkZone.Local)]
+    [InlineData("::1", NetworkZone.Local)]
+    [InlineData("::ffff:127.0.0.1", NetworkZone.Local)]
+    [InlineData("192.168.1.20", NetworkZone.Lan)]
+    [InlineData("::ffff:192.168.1.20", NetworkZone.Lan)]
+    [InlineData("10.0.0.7", NetworkZone.Lan)]
+    [InlineData("172.16.5.5", NetworkZone.Lan)]
+    [InlineData("172.31.255.1", NetworkZone.Lan)]
+    [InlineData("169.254.1.1", NetworkZone.Lan)]
+    [InlineData("fd12:3456::1", NetworkZone.Lan)]
+    [InlineData("fe80::1", NetworkZone.Lan)]
+    [InlineData("172.32.0.1", NetworkZone.Remote)]
+    [InlineData("100.100.1.1", NetworkZone.Remote)] // Tailscale's shared address space
+    [InlineData("100.64.0.1", NetworkZone.Remote)]
+    [InlineData("8.8.8.8", NetworkZone.Remote)]
+    [InlineData("2001:db8::1", NetworkZone.Remote)]
+    public void SortsAddressesIntoThisComputerTheHomeNetworkAndRemote(string ip, NetworkZone expected) =>
+        Assert.Equal(expected, LoginGate.ZoneOf(IPAddress.Parse(ip)));
+
+    [Fact]
+    public void AdministeringNeedsTheRoleAndAPlaceInsideTheHouse()
+    {
+        var admin = LoginGate.CreatePrincipal(_users.Add("ann", "4321", admin: true), local: false);
+        var user = LoginGate.CreatePrincipal(_users.Add("bob", "4321"), local: false);
+
+        Assert.True(LoginGate.IsAdmin(admin));
+        Assert.Equal(NetworkZone.Remote, LoginGate.ZoneOf(admin)); // never stamped: assume the worst
+        Assert.False(LoginGate.CanAdminister(admin));
+
+        LoginGate.StampZone(admin, NetworkZone.Lan);
+        Assert.True(LoginGate.CanAdminister(admin));
+
+        LoginGate.StampZone(admin, NetworkZone.Remote); // the laptop left the house: the next request re-stamps
+        Assert.Equal(NetworkZone.Remote, LoginGate.ZoneOf(admin));
+        Assert.False(LoginGate.CanAdminister(admin));
+        Assert.Single(admin.FindAll(LoginGate.ZoneClaim)); // replaced, not piled up
+
+        LoginGate.StampZone(user, NetworkZone.Local);
+        Assert.False(LoginGate.CanAdminister(user)); // the right place, but not an administrator
+    }
+
+    [Theory]
     [InlineData("/chat/abc?x=1", "/chat/abc?x=1")]
     [InlineData("/", "/")]
     [InlineData(null, "/")]
@@ -139,6 +181,8 @@ public sealed class LoginGateTests
         Assert.Equal(_users.Owner.Id, LoginGate.UserId(Assert.Single(reached)));
         Assert.True(LoginGate.IsLocal(reached[0]));
         Assert.True(LoginGate.IsAdmin(reached[0]));
+        Assert.Equal(NetworkZone.Local, LoginGate.ZoneOf(reached[0]));
+        Assert.True(LoginGate.CanAdminister(reached[0]));
 
         var page = Context("10.0.0.7", "GET", "/chat/abc", accept: "text/html,*/*");
         page.Request.QueryString = new QueryString("?x=1");
@@ -159,7 +203,7 @@ public sealed class LoginGateTests
         Assert.Equal(2, reached.Count);
         Assert.False(reached[1].Identity?.IsAuthenticated ?? false); // static files pass through anonymously
 
-        var ann = _users.Add("ann", "4321");
+        var ann = _users.Add("ann", "4321", admin: true);
         var signedIn = Context("10.0.0.7", "GET", "/chat/abc", accept: "text/html");
         signedIn.User = LoginGate.CreatePrincipal(ann, local: false); // what the cookie handler would have set
         await middleware.InvokeAsync(signedIn);
@@ -167,6 +211,16 @@ public sealed class LoginGateTests
         Assert.Equal(3, reached.Count);
         Assert.Equal(ann.Id, LoginGate.UserId(reached[2]));
         Assert.False(LoginGate.IsLocal(reached[2]));
+        Assert.Equal(NetworkZone.Lan, LoginGate.ZoneOf(reached[2])); // on the home network: may administer
+        Assert.True(LoginGate.CanAdminister(reached[2]));
+
+        var away = Context("100.101.102.103", "GET", "/settings/connections", accept: "text/html"); // Tailscale
+        away.User = LoginGate.CreatePrincipal(ann, local: false);
+        await middleware.InvokeAsync(away);
+        Assert.Equal(200, away.Response.StatusCode); // signed in, so the page loads...
+        Assert.Equal(NetworkZone.Remote, LoginGate.ZoneOf(reached[3]));
+        Assert.True(LoginGate.IsAdmin(reached[3]));
+        Assert.False(LoginGate.CanAdminister(reached[3])); // ...but the page itself refuses to administer from there
     }
 
     private static DefaultHttpContext Context(string ip, string method, string path, string accept)

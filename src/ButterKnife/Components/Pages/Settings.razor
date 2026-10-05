@@ -1,6 +1,7 @@
-@* Settings page. The section list lives in SettingsLayout; this picks the section from the route and checks the
-   role: Account is for everyone, the rest for administrators. "/connections" is kept so old bookmarks still land
-   on the connections section. *@
+@* Settings page. The section list lives in SettingsLayout; this picks the section from the route and checks who is
+   asking and from where: Account is for everyone, the rest for administrators inside the house (this computer or
+   the home network; see LoginGate.NetworkZone). "/connections" is kept so old bookmarks still land on the
+   connections section. *@
 @page "/settings"
 @page "/settings/{Section}"
 @page "/connections"
@@ -21,20 +22,27 @@ else
         case "account":
             <AccountSettings />
             break;
-        case "general" when _user.IsAdmin:
+        case "general" when _canAdminister:
             <GeneralSettings />
             break;
-        case "connections" when _user.IsAdmin:
+        case "connections" when _canAdminister:
             <ConnectionsSettings />
             break;
-        case "personas" when _user.IsAdmin:
+        case "personas" when _canAdminister:
             <PersonasSettings />
             break;
-        case "users" when _user.IsAdmin:
+        case "users" when _canAdminister:
             <UsersSettings />
             break;
-        case "data" when _user.IsAdmin:
+        case "data" when _canAdminister:
             <DataSettings />
+            break;
+        case "general" or "connections" or "personas" or "users" or "data" when _user.IsAdmin:
+            <h1 class="h4">Only from home</h1>
+            <p class="text-muted">
+                You are an administrator, but @Title can only be changed from inside the house: on the computer running
+                ButterKnife or a device on the same network. From here you can chat and change your <a href="settings/account">Account</a>.
+            </p>
             break;
         case "general" or "connections" or "personas" or "users" or "data":
             <h1 class="h4">Administrators only</h1>
@@ -51,13 +59,18 @@ else
     [Parameter] public string? Section { get; set; }
 
     private AppUser? _user;
+    private bool _canAdminister;
 
-    protected override async Task OnInitializedAsync() => _user = await CurrentUser.GetAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        _user = await CurrentUser.GetAsync();
+        _canAdminister = await CurrentUser.CanAdministerAsync();
+    }
 
     private string Current =>
         Nav.ToBaseRelativePath(Nav.Uri).TrimEnd('/').Equals("connections", StringComparison.OrdinalIgnoreCase)
             ? "connections"
-            : (Section ?? (_user is { IsAdmin: false } ? "account" : "general")).ToLowerInvariant();
+            : (Section ?? (_canAdminister ? "general" : "account")).ToLowerInvariant();
 
     private string Title => Current switch
     {

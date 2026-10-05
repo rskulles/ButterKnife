@@ -53,10 +53,10 @@ app.MapLogin();
 
 // Settings → Data → "Download a backup": a consistent snapshot of the database, streamed as a file and deleted
 // once sent. A plain GET so the browser handles the download itself (no circuit round trip for a large file).
-// Administrators only: the file holds every user's chats.
+// Administrators inside the house only: the file holds every user's chats.
 app.MapGet("/backup", async (HttpContext context, SqliteDatabase database, CancellationToken cancellationToken) =>
 {
-    if (!LoginGate.IsAdmin(context.User))
+    if (!LoginGate.CanAdminister(context.User))
     {
         return Results.StatusCode(StatusCodes.Status403Forbidden);
     }

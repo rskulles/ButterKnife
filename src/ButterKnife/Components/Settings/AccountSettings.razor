@@ -34,6 +34,21 @@ else
                     <span class="text-body-secondary"> · on this computer, no sign-in needed.</span>
                 }
             </p>
+            <p class="small text-body-secondary">
+                <i class="bi @(_zone == NetworkZone.Remote ? "bi-globe2" : "bi-house-door") me-1" aria-hidden="true"></i>
+                @(_zone switch
+                {
+                    NetworkZone.Local => "Connected from this computer.",
+                    NetworkZone.Lan => "Connected from your home network.",
+                    _ => "Connected from outside the house.",
+                })
+                @if (_user.IsAdmin)
+                {
+                    @(_zone == NetworkZone.Remote
+                        ? " Settings, connections, personas and users can only be changed from inside the house, so from here you chat and manage your account."
+                        : " As an administrator you can change settings, connections, personas and users from here.")
+                }
+            </p>
 
             <label class="form-label" for="display-name">Your name in chats</label>
             <input id="display-name" class="form-control" @bind="_displayName" @bind:event="oninput" @onkeydown="OnProfileKeyDownAsync"
@@ -114,6 +129,7 @@ else
 @code {
     private AppUser? _user;
     private bool _local;
+    private NetworkZone _zone = NetworkZone.Remote;
     private string _displayName = "";
     private string _username = "";
     private string _password = "";
@@ -144,6 +160,7 @@ else
     {
         _user = await CurrentUser.GetAsync();
         _local = await CurrentUser.IsLocalAsync();
+        _zone = await CurrentUser.ZoneAsync();
         if (_user is null)
         {
             Nav.NavigateTo("login", forceLoad: true); // the account was deleted while this page was open
