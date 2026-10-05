@@ -1,0 +1,316 @@
+@* Users section (administrators): everyone who can open this ButterKnife from another device, with their role.
+   Deleting a user deletes their chats; the owner (this computer's account) cannot be deleted or demoted. *@
+@implements IDisposable
+@inject IUserStore Users
+@inject UserEvents Events
+@inject CurrentUser CurrentUser
+
+<h1 class="h4">Users</h1>
+<p class="text-muted">
+    People who can sign in from other devices on the network, each with their own chats. Administrators can also change
+    settings, connections and personas. Turn on <em>Reachable from other devices</em> under General for any of this to matter.
+</p>
+
+<div class="row g-4">
+    <div class="col-xl-7">
+        <div class="list-group">
+            @foreach (var u in _users)
+            {
+                <div class="list-group-item">
+                    <div class="d-flex align-items-start gap-2 flex-wrap">
+                        <div class="flex-grow-1 min-w-0">
+                            <div class="fw-semibold">
+                                @u.DisplayName <span class="fw-normal text-body-secondary">@u.Username</span>
+                                @if (u.IsOwner)
+                                {
+                                    <span class="badge text-bg-secondary ms-1 fw-normal" title="The account this computer uses without signing in">owner</span>
+                                }
+                                @if (u.IsAdmin)
+                                {
+                                    <span class="badge text-bg-primary ms-1 fw-normal" title="Can change settings, connections, personas and users">admin</span>
+                                }
+                                @if (!u.HasPassword)
+                                {
+                                    <span class="badge text-bg-warning ms-1 fw-normal" title="Cannot sign in from another device until a password is set">no password</span>
+                                }
+                                @if (_me?.Id == u.Id)
+                                {
+                                    <span class="badge text-bg-light border ms-1 fw-normal">you</span>
+                                }
+                            </div>
+                            <div class="small text-body-secondary">
+                                @(u.LastLoginAt is { } at ? $"Last signed in {at.LocalDateTime:MMM d, HH:mm}" : "Never signed in from another device")
+                            </div>
+                        </div>
+
+                        @if (_pendingDelete == u.Id)
+                        {
+                            <span class="d-flex align-items-center gap-1 small" role="alertdialog" aria-label="Delete this user?">
+                                Delete @u.DisplayName and all their chats?
+                                <button type="button" class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(u)" disabled="@_busy">Delete</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _pendingDelete = null">Keep</button>
+                            </span>
+                        }
+                        else if (_resetting == u.Id)
+                        {
+                            <span class="d-flex align-items-center gap-1" role="group" aria-label="New password">
+                                <input type="password" class="form-control form-control-sm" placeholder="New password" @bind="_resetPassword" @bind:event="oninput"
+                                       @onkeydown="e => OnResetKeyAsync(e, u)" autocomplete="new-password" maxlength="@PasswordHasher.MaxLength" aria-label="New password for @u.DisplayName" />
+                                <button type="button" class="btn btn-sm btn-primary" @onclick="() => ResetPasswordAsync(u)" disabled="@(_busy || PasswordHasher.Validate(_resetPassword) is not null)">Set</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _resetting = null">Cancel</button>
+                            </span>
+                        }
+                        else
+                        {
+                            <div class="d-flex align-items-center gap-1 flex-wrap">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => BeginReset(u)" disabled="@_busy"
+                                        title="@(u.HasPassword ? "Give them a new password; their devices sign in again" : "Give them a password so they can sign in")">
+                                    @(u.HasPassword ? "Reset password" : "Set password")
+                                </button>
+                                @if (!u.IsOwner)
+                                {
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => SetAdminAsync(u, !u.IsAdmin)" disabled="@(_busy || _me?.Id == u.Id)"
+                                            title="@(_me?.Id == u.Id ? "You cannot change your own role" : u.IsAdmin ? "Back to a plain user" : "Let them change settings, connections, personas and users")">
+                                        @(u.IsAdmin ? "Remove admin" : "Make admin")
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => _pendingDelete = u.Id" disabled="@(_busy || _me?.Id == u.Id)"
+                                            title="@(_me?.Id == u.Id ? "You cannot delete yourself" : "Delete this user and their chats")">Delete</button>
+                                }
+                            </div>
+                        }
+                    </div>
+                    @if (_resetting == u.Id && _resetPassword.Length > 0 && PasswordHasher.Validate(_resetPassword) is { } resetProblem)
+                    {
+                        <div class="form-text text-warning-emphasis">@resetProblem</div>
+                    }
+                </div>
+            }
+        </div>
+        @if (_listMessage is not null)
+        {
+            <div class="small mt-2 @(_listOk ? "text-success" : "text-danger")" role="status">@_listMessage</div>
+        }
+    </div>
+
+    <div class="col-xl-5">
+        <div class="card">
+            <div class="card-body">
+                <h2 class="h6 card-title">Add a user</h2>
+
+                <div class="mb-2">
+                    <label class="form-label small mb-0" for="u-name">Name</label>
+                    <input id="u-name" class="form-control form-control-sm" @bind="_newDisplayName" @bind:event="oninput" maxlength="@SqliteUserStore.MaxDisplayNameLength" disabled="@_busy" />
+                    <div class="form-text">Shown above their messages.</div>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label small mb-0" for="u-username">Username</label>
+                    <input id="u-username" class="form-control form-control-sm" @bind="_newUsername" @bind:event="oninput" maxlength="@SqliteUserStore.MaxUsernameLength"
+                           autocapitalize="none" spellcheck="false" autocomplete="off" disabled="@_busy" />
+                    <div class="form-text">What they type to sign in. Letters, digits, dots, dashes and underscores.</div>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label small mb-0" for="u-password">Password</label>
+                    <input id="u-password" type="password" class="form-control form-control-sm" @bind="_newPassword" @bind:event="oninput" maxlength="@PasswordHasher.MaxLength"
+                           autocomplete="new-password" disabled="@_busy" />
+                    <div class="form-text">Tell it to them; they can change it under Settings → Account.</div>
+                </div>
+                <div class="form-check mb-3">
+                    <input type="checkbox" class="form-check-input" id="u-admin" @bind="_newAdmin" disabled="@_busy" />
+                    <label class="form-check-label small" for="u-admin">Administrator</label>
+                </div>
+
+                @if (Dirty && Problem is { } problem)
+                {
+                    <div class="small text-warning-emphasis mb-2">@problem</div>
+                }
+
+                <button type="button" class="btn btn-sm btn-primary" @onclick="AddAsync" disabled="@(_busy || !Dirty || Problem is not null)">Add</button>
+
+                @if (_formMessage is not null)
+                {
+                    <div class="small mt-2 @(_formOk ? "text-success" : "text-danger")" role="status">@_formMessage</div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<AppUser> _users = [];
+    private AppUser? _me;
+    private Guid? _pendingDelete;
+    private Guid? _resetting;
+    private string _resetPassword = "";
+    private bool _busy;
+    private string? _listMessage;
+    private bool _listOk;
+
+    private string _newDisplayName = "";
+    private string _newUsername = "";
+    private string _newPassword = "";
+    private bool _newAdmin;
+    private string? _formMessage;
+    private bool _formOk;
+
+    private bool Dirty => _newDisplayName.Length > 0 || _newUsername.Length > 0 || _newPassword.Length > 0;
+
+    private string? Problem =>
+        SqliteUserStore.ValidateDisplayName(_newDisplayName)
+        ?? SqliteUserStore.ValidateUsername(_newUsername)
+        ?? (_users.Any(u => string.Equals(u.Username, _newUsername.Trim(), StringComparison.OrdinalIgnoreCase)) ? "Another user already has that username." : null)
+        ?? (_newPassword.Length == 0 ? "Give them a password to sign in with." : PasswordHasher.Validate(_newPassword));
+
+    protected override async Task OnInitializedAsync()
+    {
+        Events.Changed += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _users = await Users.ListAsync();
+        _me = await CurrentUser.GetAsync();
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private void BeginReset(AppUser u)
+    {
+        _resetting = u.Id;
+        _resetPassword = "";
+        _pendingDelete = null;
+        _listMessage = null;
+    }
+
+    private async Task OnResetKeyAsync(KeyboardEventArgs e, AppUser u)
+    {
+        if (e.Key == "Enter" && PasswordHasher.Validate(_resetPassword) is null)
+        {
+            await ResetPasswordAsync(u);
+        }
+        else if (e.Key == "Escape")
+        {
+            _resetting = null;
+        }
+    }
+
+    private async Task ResetPasswordAsync(AppUser u)
+    {
+        if (_busy || PasswordHasher.Validate(_resetPassword) is not null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _listMessage = null;
+        try
+        {
+            // Not for oneself: an admin changes their own password under Account, where it keeps their session.
+            await Users.SetPasswordAsync(u.Id, _resetPassword, signOutEverywhere: _me?.Id != u.Id);
+            _resetting = null;
+            _resetPassword = "";
+            await LoadAsync();
+            _listOk = true;
+            _listMessage = _me?.Id == u.Id
+                ? "Your password is changed."
+                : $"{u.DisplayName} has a new password; their devices will ask them to sign in again.";
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _listOk = false;
+            _listMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SetAdminAsync(AppUser u, bool isAdmin)
+    {
+        _busy = true;
+        _listMessage = null;
+        try
+        {
+            await Users.SetAdminAsync(u.Id, isAdmin);
+            await LoadAsync();
+            _listOk = true;
+            _listMessage = isAdmin
+                ? $"{u.DisplayName} is now an administrator. Their devices sign in again to pick that up."
+                : $"{u.DisplayName} is a plain user again.";
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _listOk = false;
+            _listMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteAsync(AppUser u)
+    {
+        _busy = true;
+        _listMessage = null;
+        try
+        {
+            await Users.DeleteAsync(u.Id);
+            _pendingDelete = null;
+            await LoadAsync();
+            _listOk = true;
+            _listMessage = $"Deleted {u.DisplayName} and their chats.";
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _listOk = false;
+            _listMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AddAsync()
+    {
+        if (_busy || Problem is not null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _formMessage = null;
+        try
+        {
+            var created = await Users.CreateAsync(_newUsername, _newDisplayName, _newPassword, _newAdmin);
+            _newDisplayName = "";
+            _newUsername = "";
+            _newPassword = "";
+            _newAdmin = false;
+            await LoadAsync();
+            _formOk = true;
+            _formMessage = $"Added {created.DisplayName}. They sign in as \"{created.Username}\" from any device on the network.";
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _formOk = false;
+            _formMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    public void Dispose() => Events.Changed -= OnChanged;
+}

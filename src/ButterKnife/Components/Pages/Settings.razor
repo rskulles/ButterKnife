@@ -1,46 +1,71 @@
-@* Settings page. The section list lives in SettingsLayout; this picks the section from the route.
-   "/connections" is kept so old bookmarks still land on the connections section. *@
+@* Settings page. The section list lives in SettingsLayout; this picks the section from the route and checks the
+   role: Account is for everyone, the rest for administrators. "/connections" is kept so old bookmarks still land
+   on the connections section. *@
 @page "/settings"
 @page "/settings/{Section}"
 @page "/connections"
 @layout SettingsLayout
 @inject NavigationManager Nav
+@inject CurrentUser CurrentUser
 
 <PageTitle>@Title · Settings · ButterKnife</PageTitle>
 
-@switch (Current)
+@if (_user is null)
 {
-    case "general":
-        <GeneralSettings />
-        break;
-    case "connections":
-        <ConnectionsSettings />
-        break;
-    case "personas":
-        <PersonasSettings />
-        break;
-    case "data":
-        <DataSettings />
-        break;
-    default:
-        <h1 class="h4">Not found</h1>
-        <p class="text-muted">There is no "@Section" section. Pick one on the left.</p>
-        break;
+    <p class="text-body-secondary">Loading…</p>
+}
+else
+{
+    @switch (Current)
+    {
+        case "account":
+            <AccountSettings />
+            break;
+        case "general" when _user.IsAdmin:
+            <GeneralSettings />
+            break;
+        case "connections" when _user.IsAdmin:
+            <ConnectionsSettings />
+            break;
+        case "personas" when _user.IsAdmin:
+            <PersonasSettings />
+            break;
+        case "users" when _user.IsAdmin:
+            <UsersSettings />
+            break;
+        case "data" when _user.IsAdmin:
+            <DataSettings />
+            break;
+        case "general" or "connections" or "personas" or "users" or "data":
+            <h1 class="h4">Administrators only</h1>
+            <p class="text-muted">Only an administrator can change @Title. Ask whoever runs this ButterKnife, or open <a href="settings/account">Account</a> for your own settings.</p>
+            break;
+        default:
+            <h1 class="h4">Not found</h1>
+            <p class="text-muted">There is no "@Section" section. Pick one on the left.</p>
+            break;
+    }
 }
 
 @code {
     [Parameter] public string? Section { get; set; }
 
+    private AppUser? _user;
+
+    protected override async Task OnInitializedAsync() => _user = await CurrentUser.GetAsync();
+
     private string Current =>
         Nav.ToBaseRelativePath(Nav.Uri).TrimEnd('/').Equals("connections", StringComparison.OrdinalIgnoreCase)
             ? "connections"
-            : (Section ?? "general").ToLowerInvariant();
+            : (Section ?? (_user is { IsAdmin: false } ? "account" : "general")).ToLowerInvariant();
 
     private string Title => Current switch
     {
         "general" => "General",
+        "account" => "Account",
         "connections" => "Connections",
         "personas" => "Personas",
+        "users" => "Users",
         "data" => "Data",
         _ => "Not found",
     };

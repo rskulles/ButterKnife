@@ -1,11 +1,13 @@
 @* "Open on your phone": a QR code for this page at a LAN address. Hidden on phone-sized screens (d-md-*) since
-   there is nothing to hand off to. The modal is plain Bootstrap markup toggled from C#; no JS needed. *@
+   there is nothing to hand off to. The modal is plain Bootstrap markup toggled from C#; no JS needed. The phone
+   has to sign in, so the dialog warns when the current user has no password yet. *@
 @using QRCoder
 @inject NavigationManager Nav
 @inject LanAddressService Lan
+@inject CurrentUser CurrentUser
 
 <button type="button" class="btn btn-sm btn-outline-secondary d-none d-md-inline-flex align-items-center gap-1"
-        @onclick="Open" title="Show a QR code that opens this chat on your phone">
+        @onclick="OpenAsync" title="Show a QR code that opens this chat on your phone">
     <i class="bi bi-qr-code" aria-hidden="true"></i>Open on phone
 </button>
 
@@ -24,6 +26,13 @@
                         <div class="alert alert-warning small" role="alert">
                             This ButterKnife is only listening on this computer, so a phone cannot reach it yet.
                             Turn on <a href="settings">Reachable from other devices on the local network</a> in Settings and restart.
+                        </div>
+                    }
+                    @if (_user is { HasPassword: false })
+                    {
+                        <div class="alert alert-warning small" role="alert">
+                            You have no password yet, so the phone cannot sign in as you. Set one under
+                            <a href="settings/account">Settings → Account</a> first.
                         </div>
                     }
                     @if (_selected is null)
@@ -53,7 +62,8 @@
                         </div>
                     }
                     <p class="small text-body-secondary mt-3 mb-0">
-                        Scan with the phone's camera on the same Wi‑Fi. You land in this chat, with the same conversations and
+                        Scan with the phone's camera on the same Wi‑Fi and sign in as
+                        <strong>@(_user?.Username ?? "yourself")</strong>: you land in this chat, with the same conversations and
                         connections as here. Photos attach from the phone's camera or library; dictation needs https and is not
                         available there.
                     </p>
@@ -68,9 +78,11 @@
     private PhoneAccess? _access;
     private Uri? _selected;
     private MarkupString _svg;
+    private AppUser? _user;
 
-    private void Open()
+    private async Task OpenAsync()
     {
+        _user = await CurrentUser.GetAsync();
         _access = Lan.ForPage(new Uri(Nav.Uri));
         Select(_access.Urls.FirstOrDefault()?.ToString());
     }

@@ -6,7 +6,7 @@ namespace ButterKnife.Data;
 
 public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationStore
 {
-    public async Task<Conversation> CreateAsync(string title, Guid connectionId, string model, Guid? personaId, CancellationToken cancellationToken = default)
+    public async Task<Conversation> CreateAsync(Guid userId, string title, Guid connectionId, string model, Guid? personaId, CancellationToken cancellationToken = default)
     {
         var id = Guid.NewGuid();
         var now = DateTimeOffset.UtcNow;
@@ -14,27 +14,36 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         await using var connection = await db.OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO conversations (id, title, backend, model, persona_id, created_at, updated_at)
-            VALUES ($id, $title, $backend, $model, $persona, $now, $now);
+            INSERT INTO conversations (id, title, backend, model, persona_id, user_id, created_at, updated_at)
+            VALUES ($id, $title, $backend, $model, $persona, $user, $now, $now);
             """;
         cmd.Parameters.AddWithValue("$id", id.ToString("D"));
         cmd.Parameters.AddWithValue("$title", title);
         cmd.Parameters.AddWithValue("$backend", connectionId.ToString("D"));
         cmd.Parameters.AddWithValue("$model", model);
         cmd.Parameters.AddWithValue("$persona", (object?)personaId?.ToString("D") ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$user", userId.ToString("D"));
         cmd.Parameters.AddWithValue("$now", SqliteDatabase.Format(now));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
 
-        return new Conversation(id, title, connectionId, model, personaId, null, null, null, null, now, now, []);
+        return new Conversation(id, title, connectionId, model, personaId, null, null, null, null, now, now, []) { UserId = userId };
     }
 
-    public async Task<Conversation?> GetAsync(Guid id, CancellationToken cancellationToken = default)
+    public Task<Conversation?> GetAsync(Guid id, Guid userId, CancellationToken cancellationToken = default) =>
+        LoadAsync(id, userId, cancellationToken);
+
+    /// <summary>Loads a conversation: with a user id only that user's (null for anyone else's), without one whoever it belongs to.</summary>
+    private async Task<Conversation?> LoadAsync(Guid id, Guid? userId, CancellationToken cancellationToken)
     {
         await using var connection = await db.OpenAsync(cancellationToken);
 
         await using var head = connection.CreateCommand();
-        head.CommandText = "SELECT title, backend, model, persona_id, summary, summary_through, context_tokens, context_window, created_at, updated_at, temperature, max_tokens, think, instructions FROM conversations WHERE id = $id;";
+        head.CommandText = """
+            SELECT title, backend, model, persona_id, summary, summary_through, context_tokens, context_window, created_at, updated_at, temperature, max_tokens, think, instructions, user_id
+            FROM conversations WHERE id = $id AND ($user IS NULL OR user_id = $user);
+            """;
         head.Parameters.AddWithValue("$id", id.ToString("D"));
+        head.Parameters.AddWithValue("$user", (object?)userId?.ToString("D") ?? DBNull.Value);
 
         await using var reader = await head.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
@@ -59,20 +68,23 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
             reader.IsDBNull(12) ? null : reader.GetInt64(12) != 0);
 
         var instructions = reader.IsDBNull(13) ? null : reader.GetString(13);
+        var owner = reader.IsDBNull(14) ? Guid.Empty : Guid.Parse(reader.GetString(14));
 
         var messages = await LoadMessagesAsync(connection, id, cancellationToken);
         return new Conversation(id, title, connectionId, model, personaId, summary, summaryThrough, contextTokens, contextWindow, createdAt, updatedAt, messages)
         {
             Options = options,
             Instructions = instructions,
+            UserId = owner,
         };
     }
 
-    public async Task<IReadOnlyList<ConversationSummary>> ListAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ConversationSummary>> ListAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         await using var connection = await db.OpenAsync(cancellationToken);
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT id, title, updated_at, pinned, archived FROM conversations ORDER BY pinned DESC, updated_at DESC;";
+        cmd.CommandText = "SELECT id, title, updated_at, pinned, archived FROM conversations WHERE user_id = $user ORDER BY pinned DESC, updated_at DESC;";
+        cmd.Parameters.AddWithValue("$user", userId.ToString("D"));
 
         var list = new List<ConversationSummary>();
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
@@ -88,7 +100,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         return list;
     }
 
-    public async Task<IReadOnlyList<SearchHit>> SearchAsync(string query, int limit = 50, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<SearchHit>> SearchAsync(Guid userId, string query, int limit = 50, CancellationToken cancellationToken = default)
     {
         var fts = BuildFtsQuery(query);
         if (fts is null)
@@ -101,7 +113,8 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
 
         await using (var titles = connection.CreateCommand())
         {
-            titles.CommandText = "SELECT id, title, updated_at FROM conversations WHERE title LIKE $like ESCAPE '\\' ORDER BY updated_at DESC LIMIT $limit;";
+            titles.CommandText = "SELECT id, title, updated_at FROM conversations WHERE user_id = $user AND title LIKE $like ESCAPE '\\' ORDER BY updated_at DESC LIMIT $limit;";
+            titles.Parameters.AddWithValue("$user", userId.ToString("D"));
             titles.Parameters.AddWithValue("$like", "%" + query.Trim().Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%");
             titles.Parameters.AddWithValue("$limit", limit);
             await using var reader = await titles.ExecuteReaderAsync(cancellationToken);
@@ -118,11 +131,12 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
                 FROM messages_fts
                 JOIN messages m ON m.id = messages_fts.rowid
                 JOIN conversations c ON c.id = m.conversation_id
-                WHERE messages_fts MATCH $query
+                WHERE messages_fts MATCH $query AND c.user_id = $user
                 ORDER BY bm25(messages_fts)
                 LIMIT $limit;
                 """;
             messages.Parameters.AddWithValue("$query", fts);
+            messages.Parameters.AddWithValue("$user", userId.ToString("D"));
             messages.Parameters.AddWithValue("$start", SearchHit.MarkStart.ToString());
             messages.Parameters.AddWithValue("$end", SearchHit.MarkEnd.ToString());
             messages.Parameters.AddWithValue("$limit", limit);
@@ -413,7 +427,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
 
     public async Task<Conversation> BranchAsync(Guid conversationId, long throughMessageId, string title, CancellationToken cancellationToken = default)
     {
-        var source = await GetAsync(conversationId, cancellationToken)
+        var source = await LoadAsync(conversationId, null, cancellationToken)
             ?? throw new KeyNotFoundException($"Conversation {conversationId} does not exist.");
         var kept = source.Messages.TakeWhile(m => m.Id <= throughMessageId).ToList();
         if (kept.Count == 0 || kept[^1].Id != throughMessageId)
@@ -421,7 +435,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
             throw new KeyNotFoundException($"Message {throughMessageId} is not in conversation {conversationId}.");
         }
 
-        var branch = await CreateAsync(title, source.ConnectionId, source.Model, source.PersonaId, cancellationToken);
+        var branch = await CreateAsync(source.UserId, title, source.ConnectionId, source.Model, source.PersonaId, cancellationToken);
         if (!source.Options.IsDefault)
         {
             await SetOptionsAsync(branch.Id, source.Options, cancellationToken);
@@ -438,7 +452,7 @@ public sealed class SqliteConversationStore(SqliteDatabase db) : IConversationSt
         {
             await SetSummaryAsync(branch.Id, source.Summary, through, cancellationToken);
         }
-        return (await GetAsync(branch.Id, cancellationToken))!;
+        return (await LoadAsync(branch.Id, null, cancellationToken))!;
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)

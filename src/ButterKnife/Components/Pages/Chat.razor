@@ -20,8 +20,8 @@
 @inject ChatTitler Titler
 @inject TranscriptionService Transcription
 @inject ImageGenerationService ImageGen
-@inject ISettingsStore Settings
-@inject SettingsEvents SettingsEvents
+@inject CurrentUser CurrentUser
+@inject UserEvents UserEvents
 @inject PersonaEvents PersonaEvents
 
 <PageTitle>@(_title is null ? "ButterKnife" : $"{_title} · ButterKnife")</PageTitle>
@@ -775,12 +775,13 @@
         _autoSend = DictationOptions.Value.AutoSendAfterTranscription;
         ConnectionEvents.Changed += OnConnectionsChanged;
         Events.Changed += OnConversationsChanged;
-        SettingsEvents.Changed += OnSettingsChanged;
+        UserEvents.Changed += OnUserChanged;
         PersonaEvents.Changed += OnPersonasChanged;
 
         // Local data first so the page renders at once; the model list can take a while when a connection is down,
-        // so it loads in the background and ReconcileSelection applies the saved model when it arrives.
-        await Task.WhenAll(LoadPersonasAsync(), LoadDisplayNameAsync(), LoadImageConnectionAsync());
+        // so it loads in the background and ReconcileSelection applies the saved model when it arrives. The user
+        // comes first of all: OnParametersSetAsync needs the id to load their conversation.
+        await Task.WhenAll(LoadPersonasAsync(), LoadUserAsync(), LoadImageConnectionAsync());
         _ = RefreshModelsInBackgroundAsync();
 
         // First visit to "/": OnParametersSetAsync returns early (null id == null current id), so apply the default persona here.
@@ -796,28 +797,38 @@
         StateHasChanged();
     });
 
-    /// <summary>Label above the user's messages (Settings → General); app-wide, so other circuits are told when it changes.</summary>
+    /// <summary>
+    /// The signed-in user: conversations are read and created under their id, and the label above their messages is
+    /// their display name (Settings → Account). Other circuits are told through UserEvents when that changes.
+    /// </summary>
+    private AppUser? _user;
+    private Guid _userId;
     private string _displayName = SettingKeys.DefaultUserDisplayName;
 
-    private async Task LoadDisplayNameAsync()
+    private async Task LoadUserAsync()
     {
         try
         {
-            _displayName = await Settings.GetAsync(SettingKeys.UserDisplayName, _disposed.Token) ?? SettingKeys.DefaultUserDisplayName;
+            _user = await CurrentUser.GetAsync(_disposed.Token);
         }
         catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
         {
+            return;
         }
-        catch (Exception)
+
+        if (_user is null)
         {
-            // cosmetic; keep the default
+            Nav.NavigateTo("login", forceLoad: true); // the account was deleted while this page was open
+            return;
         }
+        _userId = _user.Id;
+        _displayName = _user.DisplayName;
     }
 
-    private void OnSettingsChanged() =>
+    private void OnUserChanged() =>
         _ = InvokeAsync(async () =>
         {
-            await LoadDisplayNameAsync();
+            await LoadUserAsync();
             StateHasChanged();
         });
 
@@ -896,7 +907,7 @@
             return;
         }
 
-        var conversation = await Store.GetAsync(id, _disposed.Token);
+        var conversation = await Store.GetAsync(id, _userId, _disposed.Token);
         if (conversation is null)
         {
             _conversationId = null;
@@ -1059,7 +1070,7 @@
 
             try
             {
-                var summary = (await Store.ListAsync(_disposed.Token)).FirstOrDefault(c => c.Id == id);
+                var summary = (await Store.ListAsync(_userId, _disposed.Token)).FirstOrDefault(c => c.Id == id);
                 if (summary is not null && summary.Title != _title)
                 {
                     _title = summary.Title;
@@ -1372,7 +1383,7 @@
 
         try
         {
-            var current = (await Store.ListAsync(_disposed.Token)).FirstOrDefault(c => c.Id == conversationId);
+            var current = (await Store.ListAsync(_userId, _disposed.Token)).FirstOrDefault(c => c.Id == conversationId);
             if (current is null || current.Title != placeholder)
             {
                 return;
@@ -1625,7 +1636,7 @@
 
         try
         {
-            var conversation = await Store.GetAsync(id, _disposed.Token);
+            var conversation = await Store.GetAsync(id, _userId, _disposed.Token);
             if (conversation is null)
             {
                 return;
@@ -1762,7 +1773,7 @@
         }
 
         var title = MakeTitle(firstPrompt);
-        var conversation = await Store.CreateAsync(title, model.ConnectionId, model.Model, SelectedPersona?.Id, _disposed.Token);
+        var conversation = await Store.CreateAsync(_userId, title, model.ConnectionId, model.Model, SelectedPersona?.Id, _disposed.Token);
         if (!_options.IsDefault)
         {
             await Store.SetOptionsAsync(conversation.Id, _options, _disposed.Token);
@@ -1962,7 +1973,7 @@
         }
         ConnectionEvents.Changed -= OnConnectionsChanged;
         Events.Changed -= OnConversationsChanged;
-        SettingsEvents.Changed -= OnSettingsChanged;
+        UserEvents.Changed -= OnUserChanged;
         PersonaEvents.Changed -= OnPersonasChanged;
         if (_js is not null && _dictation == DictationState.Recording)
         {

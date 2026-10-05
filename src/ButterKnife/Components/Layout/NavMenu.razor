@@ -3,9 +3,12 @@
 @inject ConversationEvents Events
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject CurrentUser CurrentUser
+@inject UserEvents UserEvents
 
 @* The sidebar follows the page colour mode. On phones everything below the brand bar is a collapse; inside it the
-   conversation list scrolls and a footer (Settings link, colour-mode toggle) stays pinned at the bottom. *@
+   conversation list (the signed-in user's own chats) scrolls and a footer (who is signed in, Settings link,
+   colour-mode toggle) stays pinned at the bottom. *@
 <div class="d-flex flex-column flex-grow-1 overflow-hidden">
     <div class="navbar px-3 border-bottom flex-shrink-0" style="min-height: 3.5rem">
         <a class="navbar-brand fw-semibold text-body" href="">ButterKnife</a>
@@ -89,14 +92,32 @@
                 }
             </nav>
 
-            @* pb-3 matches the article's bottom padding so these buttons line up with the composer's button row. *@
-            <div class="d-flex align-items-center justify-content-between gap-2 px-2 pt-2 pb-3 border-top flex-shrink-0">
-                <nav class="nav nav-pills">
-                    <NavLink class="nav-link text-nowrap px-2 py-1" href="settings" Match="NavLinkMatch.Prefix">
-                        <i class="bi bi-gear me-2" aria-hidden="true"></i>Settings
-                    </NavLink>
-                </nav>
-                <div class="flex-shrink-0"><ThemeToggle /></div>
+            <div class="border-top flex-shrink-0">
+                @if (_user is not null)
+                {
+                    @* Who is signed in. The owner on this computer never signed in, so there is nothing to sign out of. *@
+                    <div class="d-flex align-items-center gap-2 px-3 pt-2 small text-body-secondary">
+                        <i class="bi bi-person-circle" aria-hidden="true"></i>
+                        <span class="text-truncate" title="@_user.Username">@_user.DisplayName</span>
+                        @if (!_local)
+                        {
+                            <form method="post" action="logout" class="ms-auto">
+                                <button type="submit" class="btn btn-link btn-sm p-0 text-body-secondary text-decoration-none text-nowrap" title="Sign out of this device">
+                                    <i class="bi bi-box-arrow-right me-1" aria-hidden="true"></i>Sign out
+                                </button>
+                            </form>
+                        }
+                    </div>
+                }
+                @* pb-3 matches the article's bottom padding so these buttons line up with the composer's button row. *@
+                <div class="d-flex align-items-center justify-content-between gap-2 px-2 pt-2 pb-3">
+                    <nav class="nav nav-pills">
+                        <NavLink class="nav-link text-nowrap px-2 py-1" href="settings" Match="NavLinkMatch.Prefix">
+                            <i class="bi bi-gear me-2" aria-hidden="true"></i>Settings
+                        </NavLink>
+                    </nav>
+                    <div class="flex-shrink-0"><ThemeToggle /></div>
+                </div>
             </div>
         </div>
     </div>
@@ -153,7 +174,7 @@
         try
         {
             await Task.Delay(250, token);
-            var hits = await Store.SearchAsync(_query, cancellationToken: token);
+            var hits = await Store.SearchAsync(_userId, _query, cancellationToken: token);
             if (!token.IsCancellationRequested)
             {
                 _results = hits;
@@ -225,12 +246,38 @@
 
     private IJSObjectReference? _js;
 
+    /// <summary>The signed-in user, whose chats the list shows; null until loaded, or if the account was deleted meanwhile.</summary>
+    private AppUser? _user;
+    private Guid _userId;
+    private bool _local;
+
     protected override async Task OnInitializedAsync()
     {
         Events.Changed += OnConversationsChanged;
+        UserEvents.Changed += OnUserChanged;
         Nav.LocationChanged += OnLocationChanged;
+        await LoadUserAsync();
         await LoadAsync();
     }
+
+    private async Task LoadUserAsync()
+    {
+        _user = await CurrentUser.GetAsync();
+        _local = await CurrentUser.IsLocalAsync();
+        if (_user is null)
+        {
+            Nav.NavigateTo("login", forceLoad: true); // the account was deleted while this page was open
+            return;
+        }
+        _userId = _user.Id;
+    }
+
+    private void OnUserChanged() =>
+        _ = InvokeAsync(async () =>
+        {
+            await LoadUserAsync();
+            StateHasChanged();
+        });
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -260,7 +307,7 @@
     {
         try
         {
-            _conversations = await Store.ListAsync();
+            _conversations = _user is null ? [] : await Store.ListAsync(_userId);
         }
         catch
         {
@@ -367,6 +414,7 @@
     public async ValueTask DisposeAsync()
     {
         Events.Changed -= OnConversationsChanged;
+        UserEvents.Changed -= OnUserChanged;
         Nav.LocationChanged -= OnLocationChanged;
         if (_js is not null)
         {

@@ -2,21 +2,25 @@ using ButterKnife.Services;
 
 namespace ButterKnife.Data;
 
-/// <summary>Durable conversation storage. Chat history never lives in circuit state alone.</summary>
+/// <summary>
+/// Durable conversation storage. Chat history never lives in circuit state alone. Every conversation belongs to
+/// one user: reads take the user's id and return nothing for another user's chat, so pages never have to check.
+/// </summary>
 public interface IConversationStore
 {
-    Task<Conversation> CreateAsync(string title, Guid connectionId, string model, Guid? personaId, CancellationToken cancellationToken = default);
+    Task<Conversation> CreateAsync(Guid userId, string title, Guid connectionId, string model, Guid? personaId, CancellationToken cancellationToken = default);
 
-    Task<Conversation?> GetAsync(Guid id, CancellationToken cancellationToken = default);
+    /// <summary>The conversation, or null when it does not exist or belongs to someone else.</summary>
+    Task<Conversation?> GetAsync(Guid id, Guid userId, CancellationToken cancellationToken = default);
 
-    /// <summary>Pinned first, then most recently updated first; archived conversations are included and flagged.</summary>
-    Task<IReadOnlyList<ConversationSummary>> ListAsync(CancellationToken cancellationToken = default);
+    /// <summary>The user's conversations, pinned first, then most recently updated first; archived ones are included and flagged.</summary>
+    Task<IReadOnlyList<ConversationSummary>> ListAsync(Guid userId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Full-text search over message content (every word as a prefix, all words required) plus a substring match on
-    /// titles. Best matches first, at most <paramref name="limit"/> hits. Blank queries return nothing.
+    /// Full-text search over the user's message content (every word as a prefix, all words required) plus a substring
+    /// match on titles. Best matches first, at most <paramref name="limit"/> hits. Blank queries return nothing.
     /// </summary>
-    Task<IReadOnlyList<SearchHit>> SearchAsync(string query, int limit = 50, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<SearchHit>> SearchAsync(Guid userId, string query, int limit = 50, CancellationToken cancellationToken = default);
 
     /// <summary>Pinned conversations stay at the top of the sidebar.</summary>
     Task SetPinnedAsync(Guid conversationId, bool pinned, CancellationToken cancellationToken = default);

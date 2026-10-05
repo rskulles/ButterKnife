@@ -5,9 +5,10 @@
 @inject ConversationEvents ConversationEvents
 @inject ConnectionEvents ConnectionEvents
 @inject SettingsEvents SettingsEvents
+@inject UserEvents UserEvents
 
 <h1 class="h4">Data</h1>
-<p class="text-muted">Everything ButterKnife knows is in one file: chats, images, personas, connections and settings.</p>
+<p class="text-muted">Everything ButterKnife knows is in one file: chats, images, personas, connections, users and settings.</p>
 
 <div class="row">
     <div class="col-lg-7">
@@ -38,7 +39,7 @@
             @if (_picked is { } picked)
             {
                 <div class="alert alert-warning mt-3" role="alertdialog" aria-label="Replace everything?">
-                    <strong>Replace everything?</strong> Restoring <em>@picked.Name</em> replaces every chat, connection, persona and
+                    <strong>Replace everything?</strong> Restoring <em>@picked.Name</em> replaces every chat, connection, persona, user and
                     setting with what the backup holds. This cannot be undone; download a backup first if you are not sure.
                     <div class="mt-2 d-flex gap-2">
                         <button type="button" class="btn btn-danger" @onclick="RestoreAsync" disabled="@_busy">
@@ -100,6 +101,7 @@
             ConversationEvents.NotifyChanged();
             ConnectionEvents.NotifyChanged();
             SettingsEvents.NotifyChanged();
+            UserEvents.NotifyChanged();
             _ok = true;
             _message = $"Restored {picked.Name}. Chats, connections and settings now come from the backup; reload any other open tabs.";
             _picked = null;

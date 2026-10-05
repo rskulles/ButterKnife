@@ -1,0 +1,269 @@
+@* Account section: the signed-in user's own name, username and password. Everyone gets this section; the rest of
+   Settings is for administrators. The owner (this computer's account) may have no password, in which case they
+   cannot sign in from another device until they set one here. *@
+@implements IDisposable
+@inject IUserStore Users
+@inject UserEvents Events
+@inject CurrentUser CurrentUser
+@inject NavigationManager Nav
+
+<h1 class="h4">Account</h1>
+<p class="text-muted">Who you are in this ButterKnife. Your chats are yours alone; other people sign in with their own account.</p>
+
+@if (_user is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else
+{
+    <div class="row">
+        <div class="col-lg-6">
+            <p class="small">
+                <i class="bi bi-person-circle me-1" aria-hidden="true"></i>Signed in as <strong>@_user.DisplayName</strong>
+                <span class="text-body-secondary">(@_user.Username)</span>
+                @if (_user.IsOwner)
+                {
+                    <span class="badge text-bg-secondary ms-1" title="The account this computer uses">owner</span>
+                }
+                @if (_user.IsAdmin)
+                {
+                    <span class="badge text-bg-primary ms-1" title="Can change settings, connections, personas and users">admin</span>
+                }
+                @if (_local)
+                {
+                    <span class="text-body-secondary"> · on this computer, no sign-in needed.</span>
+                }
+            </p>
+
+            <label class="form-label" for="display-name">Your name in chats</label>
+            <input id="display-name" class="form-control" @bind="_displayName" @bind:event="oninput" @onkeydown="OnProfileKeyDownAsync"
+                   maxlength="@SqliteUserStore.MaxDisplayNameLength" autocomplete="nickname" disabled="@_busy" />
+            <div class="form-text">Shown above your messages.</div>
+
+            <label class="form-label mt-3" for="username">Username</label>
+            <input id="username" class="form-control" @bind="_username" @bind:event="oninput" @onkeydown="OnProfileKeyDownAsync"
+                   maxlength="@SqliteUserStore.MaxUsernameLength" autocomplete="username" autocapitalize="none" spellcheck="false" disabled="@_busy" />
+            <div class="form-text">What you type to sign in from another device. Letters, digits, dots, dashes and underscores.</div>
+
+            <div class="mt-3 small text-uppercase text-body-secondary text-end" aria-label="Preview">@Preview</div>
+            <div class="px-3 py-2 rounded-3 bg-body-tertiary text-break text-end mb-3" aria-hidden="true">This is how your messages will be labelled.</div>
+
+            @if (ProfileProblem is { } problem)
+            {
+                <div class="form-text text-warning-emphasis mb-2">@problem</div>
+            }
+            <button type="button" class="btn btn-primary" @onclick="SaveProfileAsync" disabled="@(_busy || !ProfileDirty || ProfileProblem is not null)">Save</button>
+            @if (_profileMessage is not null)
+            {
+                <div class="small mt-2 @(_profileOk ? "text-success" : "text-danger")" role="status">@_profileMessage</div>
+            }
+
+            <hr class="my-4" />
+
+            <h2 class="h6">Password</h2>
+            @if (_user.HasPassword)
+            {
+                <p class="small mb-2"><i class="bi bi-lock-fill text-success me-1" aria-hidden="true"></i>You have a password, so you can sign in from a phone or another computer.</p>
+            }
+            else
+            {
+                <p class="small mb-2"><i class="bi bi-unlock me-1" aria-hidden="true"></i>No password yet. ButterKnife works on this computer without one, but you cannot sign in from a phone or another computer until you set one.</p>
+            }
+            <div class="row g-2 align-items-start">
+                <div class="col">
+                    <label class="visually-hidden" for="pw-new">New password</label>
+                    <input id="pw-new" type="password" class="form-control" placeholder="New password" @bind="_password" @bind:event="oninput" @onkeydown="OnPasswordKeyDownAsync"
+                           autocomplete="new-password" maxlength="@PasswordHasher.MaxLength" disabled="@_busy" />
+                </div>
+                <div class="col">
+                    <label class="visually-hidden" for="pw-confirm">Repeat the password</label>
+                    <input id="pw-confirm" type="password" class="form-control" placeholder="Again" @bind="_confirm" @bind:event="oninput" @onkeydown="OnPasswordKeyDownAsync"
+                           autocomplete="new-password" maxlength="@PasswordHasher.MaxLength" disabled="@_busy" />
+                </div>
+                <div class="col-auto">
+                    <button type="button" class="btn btn-primary" @onclick="SavePasswordAsync" disabled="@(_busy || !CanSavePassword)">@(_user.HasPassword ? "Change" : "Set password")</button>
+                </div>
+            </div>
+            @if (PasswordProblem is { } passwordProblem)
+            {
+                <div class="form-text text-warning-emphasis">@passwordProblem</div>
+            }
+            <div class="form-text">Any characters, @PasswordHasher.MinLength to @PasswordHasher.MaxLength of them. Devices you are already signed in on stay signed in.</div>
+            @if (_user.IsOwner && _user.HasPassword)
+            {
+                <button type="button" class="btn btn-link btn-sm p-0 link-danger mt-2" @onclick="RemovePasswordAsync" disabled="@_busy">Remove the password</button>
+                <div class="form-text">Other devices can then no longer sign in as you and are signed out; this computer is not affected.</div>
+            }
+            @if (_passwordMessage is not null)
+            {
+                <div class="small mt-2 @(_passwordOk ? "text-success" : "text-danger")" role="status">@_passwordMessage</div>
+            }
+
+            @if (!_local)
+            {
+                <hr class="my-4" />
+                <form method="post" action="logout">
+                    <button type="submit" class="btn btn-outline-secondary"><i class="bi bi-box-arrow-right me-1" aria-hidden="true"></i>Sign out</button>
+                </form>
+                <div class="form-text">Signs this device out. Your chats stay here for the next time you sign in.</div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private AppUser? _user;
+    private bool _local;
+    private string _displayName = "";
+    private string _username = "";
+    private string _password = "";
+    private string _confirm = "";
+    private bool _busy;
+    private string? _profileMessage;
+    private bool _profileOk;
+    private string? _passwordMessage;
+    private bool _passwordOk;
+
+    private bool ProfileDirty => _user is not null && (_displayName.Trim() != _user.DisplayName || _username.Trim() != _user.Username);
+
+    private string? ProfileProblem => !ProfileDirty ? null : SqliteUserStore.ValidateDisplayName(_displayName) ?? SqliteUserStore.ValidateUsername(_username);
+
+    private string Preview => string.IsNullOrWhiteSpace(_displayName) ? SettingKeys.DefaultUserDisplayName : _displayName.Trim();
+
+    private string? PasswordProblem => _password.Length == 0 ? null : PasswordHasher.Validate(_password) ?? (_confirm.Length > 0 && _confirm != _password ? "The two entries differ." : null);
+
+    private bool CanSavePassword => _password.Length > 0 && _password == _confirm && PasswordHasher.Validate(_password) is null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Events.Changed += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _user = await CurrentUser.GetAsync();
+        _local = await CurrentUser.IsLocalAsync();
+        if (_user is null)
+        {
+            Nav.NavigateTo("login", forceLoad: true); // the account was deleted while this page was open
+            return;
+        }
+        _displayName = _user.DisplayName;
+        _username = _user.Username;
+    }
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        if (!ProfileDirty)
+        {
+            await LoadAsync();
+            StateHasChanged();
+        }
+    });
+
+    private async Task OnProfileKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && ProfileDirty && ProfileProblem is null)
+        {
+            await SaveProfileAsync();
+        }
+    }
+
+    private async Task SaveProfileAsync()
+    {
+        if (_user is null || !ProfileDirty || ProfileProblem is not null || _busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _profileMessage = null;
+        try
+        {
+            await Users.UpdateProfileAsync(_user.Id, _username, _displayName);
+            await LoadAsync();
+            _profileOk = true;
+            _profileMessage = $"Saved. You appear as \"{_user?.DisplayName}\" and sign in as \"{_user?.Username}\".";
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _profileOk = false;
+            _profileMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OnPasswordKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && CanSavePassword)
+        {
+            await SavePasswordAsync();
+        }
+    }
+
+    private async Task SavePasswordAsync()
+    {
+        if (_user is null || !CanSavePassword || _busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _passwordMessage = null;
+        try
+        {
+            var had = _user.HasPassword;
+            await Users.SetPasswordAsync(_user.Id, _password, signOutEverywhere: false);
+            _password = "";
+            _confirm = "";
+            await LoadAsync();
+            _passwordOk = true;
+            _passwordMessage = had ? "Password changed." : "Password set. You can now sign in from other devices with it.";
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _passwordOk = false;
+            _passwordMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RemovePasswordAsync()
+    {
+        if (_user is null || _busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        _passwordMessage = null;
+        try
+        {
+            await Users.SetPasswordAsync(_user.Id, null, signOutEverywhere: true);
+            await LoadAsync();
+            _passwordOk = true;
+            _passwordMessage = "Password removed. Other devices can no longer sign in as you.";
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _passwordOk = false;
+            _passwordMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    public void Dispose() => Events.Changed -= OnChanged;
+}

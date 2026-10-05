@@ -34,4 +34,7 @@ public sealed record Conversation(
 
     /// <summary>Extra instructions sent with every request in this conversation, on top of the persona's prompt; null for none.</summary>
     public string? Instructions { get; init; }
+
+    /// <summary>The user whose chat this is. Guid.Empty only for a row the migration has not reached, which does not happen after the schema check.</summary>
+    public Guid UserId { get; init; }
 }

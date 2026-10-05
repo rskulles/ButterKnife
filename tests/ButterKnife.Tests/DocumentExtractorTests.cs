@@ -96,13 +96,13 @@ public sealed class DocumentExtractorTests : IDisposable
     {
         var db = new SqliteDatabase(Microsoft.Extensions.Options.Options.Create(new DatabaseOptions { ConnectionString = $"Data Source={Path.Combine(_dir, "test.db")}" }));
         var store = new SqliteConversationStore(db);
-        var conv = await store.CreateAsync("t", Guid.NewGuid(), "m", null, CancellationToken.None);
+        var conv = await store.CreateAsync(Guid.NewGuid(), "t", Guid.NewGuid(), "m", null, CancellationToken.None);
         var file = new ChatFile("report.pdf", "application/pdf", 1234, "The quarterly numbers.");
 
         var id = await store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.User, "look") { Files = [file] }, CancellationToken.None);
         await store.AppendMessageAsync(conv.Id, new ChatMessage(ChatRole.Assistant, "ok"), CancellationToken.None);
 
-        var loaded = (await store.GetAsync(conv.Id, CancellationToken.None))!.Messages;
+        var loaded = (await store.GetAsync(conv.Id, conv.UserId, CancellationToken.None))!.Messages;
         Assert.Equal([file], loaded[0].Files);
         Assert.Empty(loaded[1].Files);
 
@@ -110,7 +110,7 @@ public sealed class DocumentExtractorTests : IDisposable
         Assert.Equal([file], branch.Messages[0].Files);
 
         await store.DeleteMessageAsync(conv.Id, id, CancellationToken.None);
-        Assert.DoesNotContain((await store.GetAsync(conv.Id, CancellationToken.None))!.Messages, m => m.HasFiles);
+        Assert.DoesNotContain((await store.GetAsync(conv.Id, conv.UserId, CancellationToken.None))!.Messages, m => m.HasFiles);
     }
 
     [Fact]

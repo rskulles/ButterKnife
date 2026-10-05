@@ -13,7 +13,7 @@ builder.Services.AddRazorComponents()
 builder.Services.AddLlmBackends(builder.Configuration);
 builder.Services.AddDataStores(builder.Configuration);
 builder.Services.AddSingleton<LanAddressService>(); // "open on your phone" QR code
-builder.Services.AddSingleton<NetworkPinGate>(); // optional PIN for devices other than this computer
+builder.Services.AddAccounts(); // user accounts: this computer is the owner, other devices sign in
 
 // Settings → General asks GitHub for the latest release (only then, and cached); a short timeout keeps the page snappy offline.
 builder.Services.AddHttpClient(UpdateChecker.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10));
@@ -41,18 +41,25 @@ if (!app.Environment.IsDevelopment())
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 app.UseHttpsRedirection();
 
-// Devices that have not entered the PIN (when one is set) are sent to /unlock; this computer never is.
-app.UseMiddleware<NetworkPinMiddleware>();
+// Who is asking: a signed-in cookie names the user, this computer counts as the owner, and anyone else is sent to
+// /login (see LoginMiddleware). Must sit before antiforgery and the endpoints.
+app.UseAuthentication();
+app.UseMiddleware<LoginMiddleware>();
 
 app.UseAntiforgery();
 
 app.MapStaticAssets(DesktopLauncher.StaticAssetsManifestPath);
-app.MapNetworkPin();
+app.MapLogin();
 
 // Settings → Data → "Download a backup": a consistent snapshot of the database, streamed as a file and deleted
 // once sent. A plain GET so the browser handles the download itself (no circuit round trip for a large file).
-app.MapGet("/backup", async (SqliteDatabase database, CancellationToken cancellationToken) =>
+// Administrators only: the file holds every user's chats.
+app.MapGet("/backup", async (HttpContext context, SqliteDatabase database, CancellationToken cancellationToken) =>
 {
+    if (!LoginGate.IsAdmin(context.User))
+    {
+        return Results.StatusCode(StatusCodes.Status403Forbidden);
+    }
     if (database.DataSourcePath is null)
     {
         return Results.NotFound();

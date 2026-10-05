@@ -17,26 +17,26 @@ public sealed class SqliteDatabaseBackupTests : IDisposable
     {
         var database = Open("live.db");
         var settings = new SqliteSettingsStore(database);
-        await settings.SetAsync(SettingKeys.UserDisplayName, "Before", CancellationToken.None);
+        await settings.SetAsync("test.probe", "Before", CancellationToken.None);
 
         var backup = Path.Combine(_dir, "backup.db");
         await database.BackupToAsync(backup, CancellationToken.None);
         Assert.True(new FileInfo(backup).Length > 0);
 
-        await settings.SetAsync(SettingKeys.UserDisplayName, "After", CancellationToken.None);
-        Assert.Equal("After", await settings.GetAsync(SettingKeys.UserDisplayName, CancellationToken.None));
+        await settings.SetAsync("test.probe", "After", CancellationToken.None);
+        Assert.Equal("After", await settings.GetAsync("test.probe", CancellationToken.None));
 
         await database.RestoreFromAsync(backup, CancellationToken.None);
 
-        Assert.Equal("Before", await settings.GetAsync(SettingKeys.UserDisplayName, CancellationToken.None));
-        await settings.SetAsync(SettingKeys.UserDisplayName, "Writable again", CancellationToken.None); // the restored file is fully usable
+        Assert.Equal("Before", await settings.GetAsync("test.probe", CancellationToken.None));
+        await settings.SetAsync("test.probe", "Writable again", CancellationToken.None); // the restored file is fully usable
     }
 
     [Fact]
     public async Task RestoreRejectsFilesThatAreNotButterKnifeDatabases()
     {
         var database = Open("live.db");
-        await new SqliteSettingsStore(database).SetAsync(SettingKeys.UserDisplayName, "Keep", CancellationToken.None);
+        await new SqliteSettingsStore(database).SetAsync("test.probe", "Keep", CancellationToken.None);
 
         var text = Path.Combine(_dir, "notes.db");
         await File.WriteAllTextAsync(text, "just some text, long enough to have a header");
@@ -52,14 +52,14 @@ public sealed class SqliteDatabaseBackupTests : IDisposable
         }
         await Assert.ThrowsAsync<InvalidDataException>(() => database.RestoreFromAsync(other, CancellationToken.None));
 
-        Assert.Equal("Keep", await new SqliteSettingsStore(database).GetAsync(SettingKeys.UserDisplayName, CancellationToken.None));
+        Assert.Equal("Keep", await new SqliteSettingsStore(database).GetAsync("test.probe", CancellationToken.None));
     }
 
     [Fact]
     public async Task BackupOverwritesAnExistingFile()
     {
         var database = Open("live.db");
-        await new SqliteSettingsStore(database).SetAsync(SettingKeys.UserDisplayName, "x", CancellationToken.None);
+        await new SqliteSettingsStore(database).SetAsync("test.probe", "x", CancellationToken.None);
         var backup = Path.Combine(_dir, "backup.db");
         await File.WriteAllTextAsync(backup, "stale");
 

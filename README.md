@@ -45,8 +45,9 @@ answers gets an *Add* button. Or pick a preset, type the address, hit *Test*, sa
   address or the `/v1` one, either is fine.
 
 **3. Use it from the couch (optional).** Under **Settings → General**, flip on *Reachable from other devices on the
-local network* and restart ButterKnife. Then hit *Open on phone* in any chat and scan the code. Set a PIN on the same
-page so only people who know it can open your chats from the Wi‑Fi; your own computer never has to type it.
+local network* and restart ButterKnife. Give yourself a password under **Settings → Account**, then hit *Open on
+phone* in any chat, scan the code and sign in. Your own computer never signs in: it is always you. Anyone else on the
+Wi‑Fi needs an account you make for them under **Settings → Users**, and they only ever see their own chats.
 
 ## What you get
 
@@ -74,12 +75,14 @@ page so only people who know it can open your chats from the Wi‑Fi; your own c
   address; that's the browser's rule, not ours.
 - **Search, pin, archive.** A box at the top of the chat list finds any message or title across every chat and
   jumps straight to the message. Pin the chats you keep coming back to; archive the ones you're done with.
+- **Room for the household.** Everyone who signs in from another device gets their own chats; nobody sees anyone
+  else's. Administrators look after connections, personas and users; everyone else just chats.
 - **Keep it safe.** Back up everything to one file from Settings → Data and restore it here or on another computer.
   Export any chat as Markdown. Settings tells you when a newer ButterKnife is out.
 - **Keyboard first, if you like.** Enter sends, Esc stops, Shift+Esc jumps to the message box, Ctrl/⌘+Shift+O starts
   a new chat.
 - **Light, dark, or match the system.** Remembered per browser.
-- **Your name, not "User".** Set it once under Settings → General.
+- **Your name, not "User".** Set it once under Settings → Account.
 
 ## Building from source
 

@@ -112,11 +112,11 @@ public sealed class ChatOptionsTests : IDisposable
     {
         var db = new SqliteDatabase(Microsoft.Extensions.Options.Options.Create(new DatabaseOptions { ConnectionString = $"Data Source={Path.Combine(_dir, "test.db")}" }));
         var store = new SqliteConversationStore(db);
-        var created = await store.CreateAsync("t", Guid.NewGuid(), "m", null, CancellationToken.None);
-        Assert.True((await store.GetAsync(created.Id, CancellationToken.None))!.Options.IsDefault);
+        var created = await store.CreateAsync(Guid.NewGuid(), "t", Guid.NewGuid(), "m", null, CancellationToken.None);
+        Assert.True((await store.GetAsync(created.Id, created.UserId, CancellationToken.None))!.Options.IsDefault);
 
         await store.SetOptionsAsync(created.Id, new ChatOptions(0.30000000000000004, 512, false), CancellationToken.None);
-        var loaded = (await store.GetAsync(created.Id, CancellationToken.None))!.Options;
+        var loaded = (await store.GetAsync(created.Id, created.UserId, CancellationToken.None))!.Options;
         Assert.Equal(new ChatOptions(0.3, 512, false), loaded);
 
         var messageId = await store.AppendMessageAsync(created.Id, new ChatMessage(ChatRole.User, "hi"), CancellationToken.None);
@@ -124,7 +124,7 @@ public sealed class ChatOptionsTests : IDisposable
         Assert.Equal(loaded, branch.Options);
 
         await store.SetOptionsAsync(created.Id, ChatOptions.Default, CancellationToken.None);
-        Assert.True((await store.GetAsync(created.Id, CancellationToken.None))!.Options.IsDefault);
+        Assert.True((await store.GetAsync(created.Id, created.UserId, CancellationToken.None))!.Options.IsDefault);
     }
 
     [Fact]
@@ -132,18 +132,18 @@ public sealed class ChatOptionsTests : IDisposable
     {
         var db = new SqliteDatabase(Microsoft.Extensions.Options.Options.Create(new DatabaseOptions { ConnectionString = $"Data Source={Path.Combine(_dir, "test.db")}" }));
         var store = new SqliteConversationStore(db);
-        var created = await store.CreateAsync("t", Guid.NewGuid(), "m", null, CancellationToken.None);
-        Assert.Null((await store.GetAsync(created.Id, CancellationToken.None))!.Instructions);
+        var created = await store.CreateAsync(Guid.NewGuid(), "t", Guid.NewGuid(), "m", null, CancellationToken.None);
+        Assert.Null((await store.GetAsync(created.Id, created.UserId, CancellationToken.None))!.Instructions);
 
         await store.SetInstructionsAsync(created.Id, "  Answer in Spanish.  ", CancellationToken.None);
-        Assert.Equal("Answer in Spanish.", (await store.GetAsync(created.Id, CancellationToken.None))!.Instructions);
+        Assert.Equal("Answer in Spanish.", (await store.GetAsync(created.Id, created.UserId, CancellationToken.None))!.Instructions);
 
         var messageId = await store.AppendMessageAsync(created.Id, new ChatMessage(ChatRole.User, "hi"), CancellationToken.None);
         var branch = await store.BranchAsync(created.Id, messageId, "b", CancellationToken.None);
         Assert.Equal("Answer in Spanish.", branch.Instructions);
 
         await store.SetInstructionsAsync(created.Id, "   ", CancellationToken.None);
-        Assert.Null((await store.GetAsync(created.Id, CancellationToken.None))!.Instructions);
+        Assert.Null((await store.GetAsync(created.Id, created.UserId, CancellationToken.None))!.Instructions);
     }
 
     public void Dispose()

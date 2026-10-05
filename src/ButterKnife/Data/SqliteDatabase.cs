@@ -180,6 +180,7 @@ public sealed class SqliteDatabase
                     summary_through INTEGER NULL,
                     context_tokens  INTEGER NULL,  -- prompt+completion tokens of the last request, as reported
                     context_window  INTEGER NULL,  -- window of the model used for the last request, if known
+                    user_id         TEXT NULL,     -- whose chat this is (users.id); filled by EnsureOwnerAsync for old rows
                     created_at      TEXT NOT NULL,
                     updated_at      TEXT NOT NULL
                 );
@@ -219,6 +220,18 @@ public sealed class SqliteDatabase
                     value      TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS users (
+                    id             TEXT PRIMARY KEY,
+                    username       TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    display_name   TEXT NOT NULL,
+                    password_hash  TEXT NULL,      -- NULL: cannot sign in from another device (the owner, until they set one)
+                    is_admin       INTEGER NOT NULL DEFAULT 0,
+                    is_owner       INTEGER NOT NULL DEFAULT 0, -- the account this computer uses without signing in; one row
+                    security_stamp TEXT NOT NULL,  -- regenerated to sign the user's devices out
+                    created_at     TEXT NOT NULL,
+                    last_login_at  TEXT NULL
+                );
                 """, cancellationToken);
 
             // Databases created before these columns existed.
@@ -238,15 +251,43 @@ public sealed class SqliteDatabase
             await AddColumnIfMissingAsync(connection, "messages", "stats", "TEXT NULL", cancellationToken);
             await AddColumnIfMissingAsync(connection, "conversations", "pinned", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
             await AddColumnIfMissingAsync(connection, "conversations", "archived", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+            await AddColumnIfMissingAsync(connection, "conversations", "user_id", "TEXT NULL", cancellationToken);
+            await ExecAsync(connection, "CREATE INDEX IF NOT EXISTS ix_conversations_user ON conversations(user_id, pinned DESC, updated_at DESC);", cancellationToken);
             await EnsureSearchIndexAsync(connection, cancellationToken);
 
             await SeedPersonasAsync(connection, cancellationToken);
+            await EnsureOwnerAsync(connection, cancellationToken);
             _initialized = true;
         }
         finally
         {
             _initLock.Release();
         }
+    }
+
+    /// <summary>
+    /// The owner account (this computer's) is created once, taking the display name from the single-user setting
+    /// that preceded accounts. Chats without a user (from before accounts, or restored from such a backup) become
+    /// the owner's, and the settings rows the account replaced are dropped.
+    /// </summary>
+    private static async Task EnsureOwnerAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO users (id, username, display_name, password_hash, is_admin, is_owner, security_stamp, created_at, last_login_at)
+            SELECT $id, 'owner', COALESCE((SELECT value FROM settings WHERE key = $nameKey), $defaultName), NULL, 1, 1, $stamp, $now, NULL
+            WHERE NOT EXISTS (SELECT 1 FROM users WHERE is_owner = 1);
+
+            UPDATE conversations SET user_id = (SELECT id FROM users WHERE is_owner = 1) WHERE user_id IS NULL;
+
+            DELETE FROM settings WHERE key IN ($nameKey, 'network.pin_hash', 'network.pin_stamp');
+            """;
+        cmd.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
+        cmd.Parameters.AddWithValue("$nameKey", SettingKeys.UserDisplayName);
+        cmd.Parameters.AddWithValue("$defaultName", SettingKeys.DefaultUserDisplayName);
+        cmd.Parameters.AddWithValue("$stamp", SqliteUserStore.NewStamp());
+        cmd.Parameters.AddWithValue("$now", Format(DateTimeOffset.UtcNow));
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
     /// <summary>INSERT OR IGNORE by stable id: adds new built-ins, never overwrites edits or re-creates deleted rows' edits.</summary>
