@@ -224,3 +224,11 @@
     outline-offset: 2px;
     transition: outline-color 1.5s ease 1s;
 }
+
+/* Mermaid renders into a <pre class="mermaid">; it must not inherit the dark code-box colours, since the diagram's
+   own theme follows the colour mode (default on light, dark on dark) and dark arrows would vanish on a dark box. */
+.msg-markdown ::deep pre.mermaid {
+    background: var(--bs-tertiary-bg);
+    color: var(--bs-body-color);
+    text-align: center;
+}

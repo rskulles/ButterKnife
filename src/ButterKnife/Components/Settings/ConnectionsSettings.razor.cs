@@ -18,12 +18,25 @@ public partial class ConnectionsSettings : IDisposable
 
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(20);
 
+    /// <summary>Chat backends first, then the special-purpose kinds; the enum's own order mixes them.</summary>
+    private static readonly BackendKind[] KindOrder =
+    [
+        BackendKind.Ollama,
+        BackendKind.OpenAiCompatible,
+        BackendKind.Anthropic,
+        BackendKind.ImageGeneration,
+        BackendKind.Transcription,
+    ];
+
     private IReadOnlyList<LlmConnection> _connections = [];
     private readonly Dictionary<Guid, (bool Ok, string Message)> _testResults = [];
     private List<string> _fetchedModels = [];
 
     private ConnectionForm _form = new();
     private Guid? _editingId;
+
+    /// <summary>The connection whose inline delete confirmation is showing, if any.</summary>
+    private Guid? _pendingDelete;
     private bool _editingHasKey;
     private string? _presetHint;
     private string? _formMessage;
@@ -144,6 +157,7 @@ public partial class ConnectionsSettings : IDisposable
     private void BeginEdit(LlmConnection c)
     {
         _editingId = c.Id;
+        _pendingDelete = null;
         _editingHasKey = c.HasApiKey;
         _form = new ConnectionForm
         {
@@ -171,6 +185,15 @@ public partial class ConnectionsSettings : IDisposable
 
     private async Task SaveAsync()
     {
+        // Names label the groups in the chat model picker, so two connections with one name would be indistinguishable there.
+        var name = _form.Name.Trim();
+        if (_connections.Any(c => c.Id != _editingId && string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            _formOk = false;
+            _formMessage = "Another connection already has that name. Give this one its own, so the model picker can tell them apart.";
+            return;
+        }
+
         _busy = true;
         _formMessage = null;
         try
@@ -218,6 +241,7 @@ public partial class ConnectionsSettings : IDisposable
 
     private async Task DeleteAsync(LlmConnection c)
     {
+        _pendingDelete = null;
         _busy = true;
         try
         {

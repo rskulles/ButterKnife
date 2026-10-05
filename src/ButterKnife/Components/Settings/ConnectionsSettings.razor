@@ -6,17 +6,26 @@
 <p class="text-muted">LLM servers this app can talk to. Pick a preset for a stock endpoint, point it at the right host, and save.</p>
 
 <div class="row g-4">
-    <div class="col-lg-7">
+    <div class="col-xl-7">
         @if (_connections.Count == 0)
         {
-            <p class="text-muted">No connections yet. Add one on the right.</p>
+            <p class="text-muted">No connections yet. Add one below.</p>
         }
         else
         {
+            @* The table scrolls sideways when it must (table-responsive) rather than breaking addresses one character
+               per line; the two least important columns step aside on narrow screens. *@
             <div class="table-responsive">
                 <table class="table table-sm align-middle">
                     <thead>
-                        <tr><th>Name</th><th>Kind</th><th>Base URL</th><th>Default model</th><th>Context</th><th></th></tr>
+                        <tr>
+                            <th>Name</th>
+                            <th>Kind</th>
+                            <th>Base URL</th>
+                            <th class="d-none d-lg-table-cell">Default model</th>
+                            <th class="d-none d-lg-table-cell">Context</th>
+                            <th></th>
+                        </tr>
                     </thead>
                     <tbody>
                         @foreach (var c in _connections)
@@ -29,16 +38,35 @@
                                         <span class="badge text-bg-secondary ms-1" title="An API key is stored for this connection">key</span>
                                     }
                                 </td>
-                                <td>@KindLabel(c.Kind)</td>
-                                <td class="text-break"><code>@c.BaseUrl</code></td>
-                                <td>@(c.DefaultModel ?? "—")</td>
-                                <td>@(c.ContextWindow is { } ctx ? $"{ctx:N0}" : "auto")</td>
+                                <td class="text-nowrap">@KindLabel(c.Kind)</td>
+                                <td class="text-nowrap"><code>@c.BaseUrl</code></td>
+                                <td class="d-none d-lg-table-cell">@(c.DefaultModel ?? "—")</td>
+                                <td class="d-none d-lg-table-cell">@(c.ContextWindow is { } ctx ? $"{ctx:N0}" : "auto")</td>
                                 <td class="text-nowrap text-end">
-                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => TestSavedAsync(c)" disabled="@_busy">Test</button>
-                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(c)" disabled="@_busy">Edit</button>
-                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteAsync(c)" disabled="@_busy">Delete</button>
+                                    @if (_pendingDelete == c.Id)
+                                    {
+                                        <span class="d-inline-flex align-items-center gap-1 small" role="alertdialog" aria-label="Delete this connection?">
+                                            Delete?
+                                            <button class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(c)" disabled="@_busy">Delete</button>
+                                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => _pendingDelete = null">Keep</button>
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => TestSavedAsync(c)" disabled="@_busy">Test</button>
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => BeginEdit(c)" disabled="@_busy">Edit</button>
+                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => _pendingDelete = c.Id" disabled="@_busy">Delete</button>
+                                    }
                                 </td>
                             </tr>
+                            @if (_pendingDelete == c.Id)
+                            {
+                                <tr>
+                                    <td colspan="6" class="small text-body-secondary">
+                                        Chats that use @c.Name keep their messages but show "model no longer available" until another model is picked for them.
+                                    </td>
+                                </tr>
+                            }
                             @if (_testResults.TryGetValue(c.Id, out var result))
                             {
                                 <tr>
@@ -78,7 +106,7 @@
                     <p class="small text-muted mt-2 mb-0" role="status">
                         Nothing answered on the usual ports (@string.Join(", ", LanScanner.Ports)). Ollama only listens on its own machine unless
                         <code>OLLAMA_HOST=0.0.0.0</code> is set there; LM Studio needs <em>Serve on local network</em> turned on. A guest or isolated
-                        Wi‑Fi hides other devices entirely. You can still type an address on the right.
+                        Wi‑Fi hides other devices entirely. You can still type an address below.
                     </p>
                 }
                 else
@@ -113,7 +141,7 @@
         </div>
     </div>
 
-    <div class="col-lg-5">
+    <div class="col-xl-5">
         <div class="card">
             <div class="card-body">
                 <h2 class="h6">@(_editingId is null ? "Add connection" : "Edit connection")</h2>
@@ -142,7 +170,7 @@
                     <div class="mb-2">
                         <label class="form-label small mb-0" for="c-kind">Kind</label>
                         <InputSelect id="c-kind" class="form-select form-select-sm" @bind-Value="_form.Kind">
-                            @foreach (var kind in Enum.GetValues<BackendKind>())
+                            @foreach (var kind in KindOrder)
                             {
                                 <option value="@kind">@KindLabel(kind)</option>
                             }
