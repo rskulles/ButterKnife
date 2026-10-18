@@ -51,6 +51,12 @@
     <None Include="../../THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The Code tab's built-in skills (Skills/<name>/SKILL.md) travel inside the assembly, so single-file and .app builds
+       need no extra files; CodeCommands reads them back by this resource name prefix. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Skills/**/SKILL.md" LogicalName="ButterKnife.Skills/%(RecursiveDir)SKILL.md" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Anthropic" Version="12.46.0" />
     <PackageReference Include="Markdig" Version="1.3.2" />

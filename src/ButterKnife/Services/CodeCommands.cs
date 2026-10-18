@@ -18,17 +18,21 @@ public enum CodeCommandSource
 /// <summary>A slash command: its name (without the slash), a one-line description, and for file commands the prompt template.</summary>
 public sealed record CodeCommand(string Name, string Description, CodeCommandSource Source, string? Template = null, string? FilePath = null);
 
-/// <summary>A skill in the project: the model sees name and description, and reads <see cref="Path"/> (relative to the folder) when it needs it.</summary>
-public sealed record CodeSkill(string Name, string Description, string Path);
+/// <summary>
+/// A skill: the model sees name and description, and calls read_skill for <see cref="Text"/> when a task matches.
+/// <see cref="Location"/> says where it came from, for /help (a path, or "built-in").
+/// </summary>
+public sealed record CodeSkill(string Name, string Description, CodeCommandSource Source, string Location, string Text);
 
 /// <summary>
 /// Slash commands and skills for the Code tab, in the shapes Claude Code uses so existing ones work unchanged:
 /// commands are Markdown files under <c>.butterknife/commands</c> or <c>.claude/commands</c> (project, then the same
 /// folders in the home directory), named after the file (a sub-folder becomes a "folder:name" prefix), whose text is
 /// the prompt with <c>$ARGUMENTS</c> replaced by whatever follows the command. Skills are folders with a
-/// <c>SKILL.md</c> under <c>.butterknife/skills</c> or <c>.claude/skills</c> in the project; only their names and
-/// descriptions go in the system prompt, and the model reads the file with read_file when a task calls for it, which
-/// keeps a small model's context small. Optional YAML front matter supplies name and description.
+/// <c>SKILL.md</c> under <c>.butterknife/skills</c> or <c>.claude/skills</c> in the project or the home directory, plus
+/// the built-in ones shipped in the assembly (<c>Skills/</c>); only their names and descriptions go in the system
+/// prompt, and the model calls read_skill when a task calls for one, which keeps a small model's context small.
+/// Optional YAML front matter supplies name and description.
 /// </summary>
 public static partial class CodeCommands
 {
@@ -111,14 +115,51 @@ public static partial class CodeCommands
         return commands;
     }
 
-    /// <summary>The project's skills, by name, capped at <see cref="MaxSkills"/>. Folders without a SKILL.md are ignored.</summary>
-    public static IReadOnlyList<CodeSkill> DiscoverSkills(CodeWorkspace workspace)
+    /// <summary>
+    /// Every skill available in this folder: the project's, then personal ones from the home directory, then the
+    /// built-ins. A name is taken by the first to claim it, so a project can replace a built-in by giving its own skill
+    /// the same name. Capped at <see cref="MaxSkills"/>; folders without a SKILL.md are ignored.
+    /// </summary>
+    public static IReadOnlyList<CodeSkill> DiscoverSkills(CodeWorkspace workspace, string? home = null)
     {
         var skills = new List<CodeSkill>();
         var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Add(CodeSkill skill)
+        {
+            if (skills.Count < MaxSkills && taken.Add(skill.Name))
+            {
+                skills.Add(skill);
+            }
+        }
+
+        foreach (var skill in SkillsIn(workspace.Root, CodeCommandSource.Project, workspace.Relative))
+        {
+            Add(skill);
+        }
+        if ((home ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) is { Length: > 0 } homeFolder && Directory.Exists(homeFolder))
+        {
+            foreach (var skill in SkillsIn(homeFolder, CodeCommandSource.Personal, f => "~/" + System.IO.Path.GetRelativePath(homeFolder, f).Replace(System.IO.Path.DirectorySeparatorChar, '/')))
+            {
+                Add(skill);
+            }
+        }
+        foreach (var skill in BuiltInSkills)
+        {
+            Add(skill);
+        }
+        return skills;
+    }
+
+    /// <summary>A skill by name (case-insensitive), as <see cref="DiscoverSkills"/> resolves it; null when there is none.</summary>
+    public static CodeSkill? FindSkill(CodeWorkspace workspace, string name, string? home = null) =>
+        DiscoverSkills(workspace, home).FirstOrDefault(s => string.Equals(s.Name, name.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private static IEnumerable<CodeSkill> SkillsIn(string root, CodeCommandSource source, Func<string, string> location)
+    {
         foreach (var folder in SkillFolders)
         {
-            var directory = System.IO.Path.Combine(workspace.Root, folder);
+            var directory = System.IO.Path.Combine(root, folder);
             if (!Directory.Exists(directory))
             {
                 continue;
@@ -135,32 +176,55 @@ public static partial class CodeCommands
             foreach (var skillFolder in skillFolders.Order(StringComparer.OrdinalIgnoreCase))
             {
                 var file = System.IO.Path.Combine(skillFolder, "SKILL.md");
-                if (skills.Count >= MaxSkills || !File.Exists(file) || ReadText(file) is not { } text)
+                if (File.Exists(file) && ReadText(file) is { } text)
                 {
-                    continue;
-                }
-                var (fields, body) = ParseFrontMatter(text);
-                var name = fields.TryGetValue("name", out var n) && n.Length > 0 ? n : System.IO.Path.GetFileName(skillFolder);
-                if (taken.Add(name))
-                {
-                    skills.Add(new CodeSkill(name, Describe(fields, body), workspace.Relative(file)));
+                    yield return Parse(text, System.IO.Path.GetFileName(skillFolder), source, location(file));
                 }
             }
         }
-        return skills;
     }
 
-    /// <summary>The system prompt section listing the skills, or null when the project has none.</summary>
+    private static CodeSkill Parse(string text, string folderName, CodeCommandSource source, string location)
+    {
+        var (fields, body) = ParseFrontMatter(text);
+        var name = fields.TryGetValue("name", out var n) && n.Length > 0 ? n : folderName;
+        return new CodeSkill(name, Describe(fields, body), source, location, Clip(body.Trim(), MaxTemplateChars));
+    }
+
+    /// <summary>The skills shipped with ButterKnife (embedded <c>Skills/&lt;name&gt;/SKILL.md</c>, see the csproj), read once.</summary>
+    public static IReadOnlyList<CodeSkill> BuiltInSkills => LazyBuiltIns.Value;
+
+    private const string ResourcePrefix = "ButterKnife.Skills/";
+
+    private static readonly Lazy<IReadOnlyList<CodeSkill>> LazyBuiltIns = new(() =>
+    {
+        var assembly = typeof(CodeCommands).Assembly;
+        var skills = new List<CodeSkill>();
+        foreach (var resource in assembly.GetManifestResourceNames().Where(r => r.StartsWith(ResourcePrefix, StringComparison.Ordinal)).Order(StringComparer.Ordinal))
+        {
+            using var stream = assembly.GetManifestResourceStream(resource);
+            if (stream is null)
+            {
+                continue;
+            }
+            using var reader = new StreamReader(stream);
+            var folderName = resource[ResourcePrefix.Length..].Split('/', '\\')[0];
+            skills.Add(Parse(reader.ReadToEnd(), folderName, CodeCommandSource.BuiltIn, "built-in"));
+        }
+        return skills;
+    });
+
+    /// <summary>The system prompt section listing the skills, or null when there are none.</summary>
     public static string? SkillsSection(IReadOnlyList<CodeSkill> skills)
     {
         if (skills.Count == 0)
         {
             return null;
         }
-        var sb = new StringBuilder("Skills in this project: instructions for particular tasks. When a task matches one, read its file with read_file first and follow it.\n");
+        var sb = new StringBuilder("Skills: step-by-step guides for common tasks. When the user's request matches one, call read_skill with its name first and follow it (the project's own instructions still come first).\n");
         foreach (var skill in skills)
         {
-            sb.Append("- ").Append(skill.Name).Append(": ").Append(skill.Description).Append(" (").Append(skill.Path).Append(")\n");
+            sb.Append("- ").Append(skill.Name).Append(": ").Append(skill.Description).Append('\n');
         }
         return sb.ToString();
     }

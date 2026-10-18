@@ -73,7 +73,9 @@ Wi‑Fi needs an account you make for them under **Settings → Users**, and the
   can't. Type `/` for commands: `/init` writes an
   `AGENTS.md` describing your project for later sessions, plus `/clear`, `/compact` and `/help`, and your own commands
   and skills as Markdown files in `.claude/` or `.butterknife/` (the same layout Claude Code uses, so existing ones
-  work). Code is for administrators at home only, since it works on that computer's files.
+  work). Ten skills come built in (exploring a project, implementing a feature, debugging, fixing failing tests,
+  writing tests, refactoring, reviewing changes, committing, writing docs and a security review), and a skill of your
+  own with the same name replaces one. Code is for administrators at home only, since it works on that computer's files.
 - **Second chances.** Edit a message and resend it, regenerate a reply, continue one that got cut off, retry a
   request that failed, or branch a chat off from any point and take it somewhere else.
 - **Show your work.** Models that think out loud get a fold-out for their reasoning. Code comes highlighted with a
