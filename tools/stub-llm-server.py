@@ -91,6 +91,15 @@ def tool_progress(body):
     if isinstance(prompt, list):
         prompt = " ".join(b.get("text", "") for b in prompt if isinstance(b, dict))
     called = []
+    # After a compaction inside the turn (CodeCompactor.ResentNote) the earlier calls are gone from the request; the
+    # stub's own summary in the system prompt lists them.
+    if "[Sent again:" in str(prompt):
+        system = body.get("system") or next((m.get("content") for m in msgs if m.get("role") == "system"), "")
+        if isinstance(system, list):
+            system = " ".join(b.get("text", "") for b in system if isinstance(b, dict))
+        found = re.findall(r"Tools called so far: ([\w, ]*)\.", system or "")
+        if found:
+            called += [t.strip() for t in found[-1].split(",") if t.strip()]
     for m in msgs[start + 1:]:
         for c in m.get("tool_calls") or []:
             called.append((c.get("function") or {}).get("name"))
@@ -177,10 +186,19 @@ class H(BaseHTTPRequestHandler):
         titling = (not continuing) and str(last.get("content", "")).startswith("Write a title")
         # The Code tab compacts a long session by asking for a summary (CodeCompactor.SummarizerSystemPrompt).
         summarising = isinstance(system, str) and system.startswith("You summarise sessions between a user and a coding agent")
+        summary = CODE_SUMMARY
         if summarising:
-            print("  code summary request, %d chars of transcript" % len(str(last.get("content", ""))), flush=True)
+            transcript = str(last.get("content", ""))
+            print("  code summary request, %d chars of transcript" % len(transcript), flush=True)
+            # Lists the tools the latest request has called, so a compaction inside a turn can carry the scenario on (see
+            # tool_progress): those after its "User:" line, or the previous summary's list plus the transcript's calls
+            # when the transcript starts inside that request.
+            prompt_at = max(transcript.rfind("\nUser: "), 0 if transcript.startswith("User: ") else -1)
+            earlier = re.findall(r"Tools called so far: ([\w, ]*)\.", transcript) if prompt_at < 0 else []
+            tools = [t.strip() for t in (earlier[-1].split(",") if earlier else []) if t.strip()] + re.findall(r"Assistant called (\w+)", transcript[max(prompt_at, 0):])
+            summary = CODE_SUMMARY + re.findall(r"\S+\s*|\s+", "- Tools called so far: %s.\n" % ", ".join(tools))
         # Replies start with the model's name so two models answering side by side can be told apart.
-        words = CONTINUATION if continuing else TITLE if titling else CODE_SUMMARY if summarising else ([f"_{body.get('model')}_ ", "says:\n\n"] + (WORDS[:6] if cut else WORDS))
+        words = CONTINUATION if continuing else TITLE if titling else summary if summarising else ([f"_{body.get('model')}_ ", "says:\n\n"] + (WORDS[:6] if cut else WORDS))
         finish = "length" if cut else "stop"
         if self.path == "/api/chat":
             self.send_response(200); self.send_header("Content-Type", "application/x-ndjson"); self.end_headers()

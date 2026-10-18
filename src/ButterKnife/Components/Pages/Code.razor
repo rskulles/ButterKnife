@@ -320,9 +320,9 @@ else if (_allowed is true)
     private bool CanCompact =>
         !_isRunning && _sessionId is not null && Selected is not null && CodeCompactor.FindCheckpoint(_history, _summaryThrough, KeepRecentPrompts) is not null;
 
-    /// <summary>The first prompt after the checkpoint, where the divider goes.</summary>
+    /// <summary>The first entry after the checkpoint (a prompt, or a step when the checkpoint is inside a turn), where the divider goes.</summary>
     private CodeItem? CheckpointItem =>
-        _summaryThrough > 0 ? _items.FirstOrDefault(i => i.Kind == ItemKind.User && i.MessageIndex >= _summaryThrough) : null;
+        _summaryThrough > 0 ? _items.FirstOrDefault(i => i.MessageIndex >= CodeCompactor.StartOf(_history, _summaryThrough)) : null;
 
     private string ContextTitle =>
         "Tokens in the last request (prompt + reply)" + (_contextWindow is null ? "; the model's window is unknown" : " out of the model's window")
@@ -1020,7 +1020,7 @@ else if (_allowed is true)
     // ---------------------------------------------------------------- the agent's callbacks (ICodeAgentObserver)
     public void OnStepStarted()
     {
-        _current = new CodeItem(ItemKind.Assistant) { IsStreaming = true, ModelName = Selected?.Model, StartedAt = Stopwatch.GetTimestamp() };
+        _current = new CodeItem(ItemKind.Assistant) { MessageIndex = _history.Count, IsStreaming = true, ModelName = Selected?.Model, StartedAt = Stopwatch.GetTimestamp() };
         _items.Add(_current);
         RequestRender(force: true);
     }
@@ -1072,7 +1072,7 @@ else if (_allowed is true)
         foreach (var call in message.ToolCalls)
         {
             var (title, icon, command) = CodeTools.Label(call);
-            _items.Add(new CodeItem(ItemKind.Tool) { CallId = call.Id, Title = title, Icon = icon, Command = command, State = ToolState.Queued });
+            _items.Add(new CodeItem(ItemKind.Tool) { MessageIndex = _history.Count - 1, CallId = call.Id, Title = title, Icon = icon, Command = command, State = ToolState.Queued });
         }
 
         if (_sessionId is { } id)
@@ -1277,14 +1277,14 @@ else if (_allowed is true)
             case ChatRole.Assistant:
                 if (message.Content.Length > 0 || message.Reasoning is { Length: > 0 })
                 {
-                    var item = new CodeItem(ItemKind.Assistant) { ModelName = message.Model, StoredStats = message.Stats }.Append(message.Content);
+                    var item = new CodeItem(ItemKind.Assistant) { MessageIndex = index, ModelName = message.Model, StoredStats = message.Stats }.Append(message.Content);
                     item.Reasoning.Append(message.Reasoning);
                     _items.Add(item);
                 }
                 foreach (var call in message.ToolCalls)
                 {
                     var (title, icon, command) = CodeTools.Label(call);
-                    _items.Add(new CodeItem(ItemKind.Tool) { CallId = call.Id, Title = title, Icon = icon, Command = command, State = ToolState.Queued });
+                    _items.Add(new CodeItem(ItemKind.Tool) { MessageIndex = index, CallId = call.Id, Title = title, Icon = icon, Command = command, State = ToolState.Queued });
                 }
                 break;
             case ChatRole.Tool:
@@ -1445,7 +1445,7 @@ else if (_allowed is true)
 
         public ItemKind Kind { get; } = kind;
 
-        /// <summary>For a prompt: its position in the history, which the compaction checkpoint counts in.</summary>
+        /// <summary>For a prompt, a reply or a call: its message's position in the history, which the compaction checkpoint counts in.</summary>
         public int MessageIndex { get; init; } = -1;
 
         /// <summary>For a prompt sent as a slash command (Text is what was typed): the prompt the model was sent.</summary>
