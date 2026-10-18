@@ -1,7 +1,7 @@
 # ButterKnife
 
-Chat with the models running on your own network. Download it, open it, point it at your Ollama or LM Studio box,
-and start talking. Nothing leaves the house.
+Chat with the models running on your own network, and put them to work on your code. Download it, open it, point it
+at your Ollama or LM Studio box, and start talking. Nothing leaves the house.
 
 ![A ButterKnife chat in dark mode: a question about counting word frequencies in Python and the model's answer with highlighted code](docs/screenshots/chat.png)
 
@@ -16,6 +16,8 @@ and start talking. Nothing leaves the house.
 - **Every screen in the house.** Run it on the desktop, open it on your phone or laptop over Wi‑Fi, and pick up the
   same chat anywhere. A QR code gets your phone there in one scan.
 - **Fast and light.** No cloud round trips, no bloat. Replies land the instant your model starts talking.
+- **A coding agent too.** The Code tab gives your own models what Claude Code gives Claude: they read your project,
+  make changes and run your tests, and you approve every step.
 - **Built for the long haul.** A little meter shows how much of the model's memory a chat has used, and ButterKnife
   quietly tidies up the older turns so a good conversation never hits a wall.
 
@@ -65,17 +67,7 @@ Wi‑Fi needs an account you make for them under **Settings → Users**, and the
   chat. The picture lands in the conversation, and one click hands it to a vision model for questions. Attach a
   picture (or click "Redraw this picture" under one you made) and `/image make it night` starts from it; a strength
   slider in the model settings says how far the redraw may stray.
-- **A coding agent for your own models.** Switch the sidebar to **Code**, pick a project folder on the computer
-  running ButterKnife, and ask for a change. The model looks around the code, edits files and runs your build or
-  tests, showing every change as a diff and asking before it writes a file or runs a command (or, if you say so,
-  only before commands, or never). Plan mode keeps it to reading and proposing. It needs a model that can call tools,
-  such as Qwen, Llama 3.1+ or Mistral, and a generous context window; ButterKnife tells you if the model you picked
-  can't. Type `/` for commands: `/init` writes an
-  `AGENTS.md` describing your project for later sessions, plus `/clear`, `/compact` and `/help`, and your own commands
-  and skills as Markdown files in `.claude/` or `.butterknife/` (the same layout Claude Code uses, so existing ones
-  work). Ten skills come built in (exploring a project, implementing a feature, debugging, fixing failing tests,
-  writing tests, refactoring, reviewing changes, committing, writing docs and a security review), and a skill of your
-  own with the same name replaces one. Code is for administrators at home only, since it works on that computer's files.
+- **A coding agent for your own models.** See [Code](#code) below.
 - **Second chances.** Edit a message and resend it, regenerate a reply, continue one that got cut off, retry a
   request that failed, or branch a chat off from any point and take it somewhere else.
 - **Show your work.** Models that think out loud get a fold-out for their reasoning. Code comes highlighted with a
@@ -96,6 +88,33 @@ Wi‑Fi needs an account you make for them under **Settings → Users**, and the
   a new chat.
 - **Light, dark, or match the system.** Remembered per browser.
 - **Your name, not "User".** Set it once under Settings → Account.
+
+## Code
+
+Switch the sidebar from **Chat** to **Code**, pick a project folder on the computer running ButterKnife, and ask for a
+change, a fix, a test or an explanation. The model looks around the code, edits files and runs your build or tests
+until the job is done.
+
+- **You stay in charge.** Every edit is shown as a diff and every command exactly as it will run, and nothing happens
+  until you allow it. Allow one thing, allow everything like it for the rest of the session, or say no and tell the
+  model what to do instead. Prefer fewer prompts? Let it edit freely and ask only before commands, or never ask.
+  **Plan** mode keeps it to reading and proposing.
+- **Commands.** Type `/` for a list. `/init` explores the project and writes an `AGENTS.md` that later sessions read
+  first; `/clear` starts over in the same folder, `/compact` frees up room, `/help` shows what's available.
+- **Skills.** Ten come built in: exploring a project, implementing a feature, debugging, fixing failing tests,
+  writing tests, refactoring, reviewing changes, committing, writing docs, and a security review. The model picks the
+  one that fits the task.
+- **Bring your own.** Commands and skills are Markdown files in a `.claude/` or `.butterknife/` folder, in the project
+  or in your home folder for every project. It's the same layout Claude Code uses, so ones you already have just work.
+  A skill of yours with a built-in's name replaces the built-in.
+- **Long jobs fit.** When a session nears the model's memory limit, ButterKnife summarises the earlier work and keeps
+  going, even in the middle of one long task.
+- **Pick a capable model.** Code needs a model that can call tools, such as Qwen, Llama 3.1 or later, or Mistral, and
+  a generous context window. ButterKnife tells you if the model you picked can't, and suggests raising the window when
+  it is small.
+
+Code works on the files of the computer running ButterKnife, whichever device you are looking from, so it is only for
+administrators connected from home.
 
 ## Building from source
 
