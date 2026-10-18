@@ -60,7 +60,7 @@ public interface ICodeAgentObserver
     /// <summary>The call finished (or was refused); persist the result message.</summary>
     Task OnToolFinishedAsync(ToolInvocation invocation, ToolResult result, ChatMessage resultMessage);
 
-    /// <summary>The context is nearly full: earlier prompts are being summarised before the next request.</summary>
+    /// <summary>The context is nearly full: earlier prompts or steps are being summarised before the next request.</summary>
     void OnCompacting();
 
     /// <summary>The summary is ready and already in use; persist the checkpoint.</summary>
@@ -111,7 +111,7 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
     /// <summary>Compact before a request expected to use this share of the window (Llm:AutoCompactThreshold; 0 disables).</summary>
     public double AutoCompactThreshold { get; set; } = 0.8;
 
-    /// <summary>User prompts kept verbatim after a compaction (fewer when there are not that many).</summary>
+    /// <summary>User prompts kept verbatim after a compaction (only the last turn when there are not that many; see CodeCompactor.FindCheckpoint).</summary>
     public int KeepRecentPrompts { get; set; } = 2;
 
     /// <summary>
@@ -236,8 +236,9 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
 
     /// <summary>
     /// The messages for the next step: the system prompt (with the summary, if any), then the history after the
-    /// checkpoint with old tool results cleared. When that would pass the threshold, earlier prompts are compacted first,
-    /// and if it still would, every result but the latest step's is cleared.
+    /// checkpoint with old tool results cleared and old edits shrunk. When that would pass the threshold, earlier prompts
+    /// (or, in one long turn, its earlier steps) are compacted first, and if it still would, every result but the latest
+    /// step's is cleared.
     /// </summary>
     private async Task<List<ChatMessage>> PrepareRequestAsync(List<ChatMessage> history, bool readOnly, IReadOnlyList<ToolDefinition> tools, ICodeAgentObserver observer, CancellationToken cancellationToken)
     {
@@ -278,8 +279,8 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
 
     private List<ChatMessage> BuildRequest(List<ChatMessage> history, bool readOnly, int resultBudget)
     {
-        var tail = history.Skip(CodeCompactor.StartOf(history, SummaryThrough)).ToList();
-        return [new(ChatRole.System, CodePrompt.Compose(workspace, readOnly, Summary)), .. CodeCompactor.ClipOldResults(tail, resultBudget)];
+        var tail = CodeCompactor.RequestTail(history, SummaryThrough);
+        return [new(ChatRole.System, CodePrompt.Compose(workspace, readOnly, Summary)), .. CodeCompactor.ShrinkOldEdits(CodeCompactor.ClipOldResults(tail, resultBudget))];
     }
 
     /// <summary>Whether a request is expected to pass the threshold: the larger of the character estimate and the last reported count plus what was added since.</summary>

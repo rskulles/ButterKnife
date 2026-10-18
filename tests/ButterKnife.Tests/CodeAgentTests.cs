@@ -176,27 +176,106 @@ public sealed class CodeAgentTests : IDisposable
     }
 
     [Fact]
-    public async Task ClearsOldResultsWhenOnePromptAloneFillsTheWindow()
+    public async Task ClearsOldResultsWhenOnePromptFillsTheWindowAndCannotBeSummarised()
     {
-        // A single prompt: nothing can be compacted, so earlier results are cleared and the latest step's are kept.
+        // A single prompt whose summary fails: earlier results are cleared and the latest step's are kept.
         var history = new List<ChatMessage> { new(ChatRole.User, "read everything") };
         for (var i = 0; i < 3; i++)
         {
             history.Add(new(ChatRole.Assistant, "") { ToolCalls = [Read($"r{i}")] });
             history.Add(new(ChatRole.Tool, $"result {i} " + new string('x', 1500)) { ToolCallId = $"r{i}", ToolName = CodeTools.ReadFile });
         }
-        var client = new ScriptedClient([]);
+        var client = new ScriptedClient([]) { FailSummaries = true };
         var observer = new RecordingObserver(PermissionChoice.Allow);
 
         await new CodeAgent(client, "m", _workspace) { ContextWindow = 1000 }.RunAsync(history, observer, CancellationToken.None);
 
-        Assert.Empty(client.SummaryRequests);
+        Assert.Single(client.SummaryRequests);
         Assert.Empty(observer.Compactions);
         var results = client.Requests[0].Where(m => m.Role == ChatRole.Tool).ToList();
         Assert.Equal(["r0", "r1", "r2"], results.Select(r => r.ToolCallId));
         Assert.All(results.Take(2), r => Assert.StartsWith("[This read_file result", r.Content));
         Assert.StartsWith("result 2", results[2].Content);
         Assert.StartsWith("result 0", history[2].Content); // only the wire copy changed
+    }
+
+    [Fact]
+    public async Task CompactsInsideOneLongTurnAndKeepsSendingValidHistories()
+    {
+        // One prompt, then twenty steps that each write a 3000-character file, in a small window.
+        const int steps = 20;
+        var client = new ScriptedClient(Enumerable.Range(0, steps)
+            .Select(i => new[] { new ToolCall($"w{i}", CodeTools.WriteFile, $$"""{"path":"f{{i}}.txt","content":"{{new string((char)('a' + i), 3000)}}"}""") })
+            .ToArray());
+        var observer = new RecordingObserver(PermissionChoice.Allow);
+        var agent = new CodeAgent(client, "m", _workspace) { Mode = CodePermissionMode.Auto, ContextWindow = 2800, KeepRecentPrompts = 2 };
+        var history = new List<ChatMessage> { new(ChatRole.User, "write twenty files") };
+
+        var end = await agent.RunAsync(history, observer, CancellationToken.None);
+
+        Assert.Equal(CodeTurnEnd.Done, end);
+        Assert.Equal(steps + 1, client.Requests.Count);
+        Assert.True(File.Exists(Path.Combine(_root, $"f{steps - 1}.txt")));
+        Assert.True(observer.Compactions.Count >= 2, $"compacted {observer.Compactions.Count} times");
+        Assert.Equal(observer.Compactions.Count, client.SummaryRequests.Count);
+
+        // Each checkpoint moves forward to the start of a whole step, never past the step the model has not seen.
+        var throughs = observer.Compactions.Select(c => c.Through).ToList();
+        Assert.Equal(throughs.Order(), throughs);
+        Assert.Equal(throughs.Count, throughs.Distinct().Count());
+        Assert.All(throughs, t => Assert.True(history[t].Role == ChatRole.Assistant && history[t].HasToolCalls && CodeCompactor.IsBoundary(history, t)));
+        Assert.Equal((observer.Compactions[^1].Summary, throughs[^1]), (agent.Summary, agent.SummaryThrough));
+        Assert.Contains("User: write twenty files", client.SummaryRequests[0][1].Content);
+        Assert.Contains("A summary of the session before these messages", client.SummaryRequests[^1][1].Content);
+
+        foreach (var request in client.Requests)
+        {
+            // System prompt, then the user, then whole steps; and the request fits the window.
+            Assert.Equal(ChatRole.System, request[0].Role);
+            Assert.Equal(ChatRole.User, request[1].Role);
+            Assert.StartsWith("write twenty files", request[1].Content);
+            Assert.Equal(request.Skip(1).Select(m => (m.Role, m.ToolCallId)), CodeAgent.Repair(request.Skip(1)).Select(m => (m.Role, m.ToolCallId)));
+            var tools = client.Options[client.Requests.IndexOf(request)].Tools!;
+            var estimate = TokenEstimator.Estimate(request) + tools.Sum(t => TokenEstimator.Estimate(t.Name + t.Description + t.Parameters.GetRawText()));
+            Assert.True(estimate < agent.ContextWindow, $"request of ~{estimate} tokens");
+
+            // Only the latest step carries a whole file.
+            var calls = request.SelectMany(m => m.ToolCalls).ToList();
+            Assert.All(calls.SkipLast(1), c => Assert.True(c.Arguments.Length < 300, c.Arguments));
+        }
+        var afterFirst = client.Requests.Last();
+        Assert.Contains(CodeCompactor.SummaryPreamble, afterFirst[0].Content);
+        Assert.EndsWith(CodeCompactor.ResentNote, afterFirst[1].Content);
+
+        // The stored transcript is untouched: the prompt once, every call and result, the closing reply.
+        Assert.Equal(1 + steps * 2 + 1, history.Count);
+        Assert.Equal("write twenty files", history[0].Content);
+        Assert.Single(history, m => m.Role == ChatRole.User);
+        Assert.Contains(new string('a', 3000), history[1].ToolCalls[0].Arguments);
+    }
+
+    [Fact]
+    public async Task ResumesFromAStoredCheckpointInsideATurn()
+    {
+        // Reloaded mid-turn: the checkpoint is the second step, so the prompt is sent again before it.
+        List<ChatMessage> history =
+        [
+            new(ChatRole.User, "tidy notes"),
+            new(ChatRole.Assistant, "") { ToolCalls = [Read("a")] },
+            new(ChatRole.Tool, "Status: draft") { ToolCallId = "a", ToolName = CodeTools.ReadFile },
+            new(ChatRole.Assistant, "") { ToolCalls = [Read("b")] },
+            new(ChatRole.Tool, "Status: draft") { ToolCallId = "b", ToolName = CodeTools.ReadFile },
+            new(ChatRole.User, "go on"),
+        ];
+        var client = new ScriptedClient([]);
+
+        await new CodeAgent(client, "m", _workspace) { Summary = "Read notes.md once.", SummaryThrough = 3 }
+            .RunAsync(history, new RecordingObserver(PermissionChoice.Allow), CancellationToken.None);
+
+        var request = client.Requests[0];
+        Assert.Equal([ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.Tool, ChatRole.User], request.Select(m => m.Role));
+        Assert.Equal($"tidy notes\n\n{CodeCompactor.ResentNote}", request[1].Content);
+        Assert.Equal("b", request[3].ToolCallId);
     }
 
     [Fact]
