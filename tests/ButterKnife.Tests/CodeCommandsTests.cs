@@ -57,22 +57,86 @@ public sealed class CodeCommandsTests : IDisposable
     }
 
     [Fact]
-    public void SkillsAreListedByNameAndDescriptionWithTheirPath()
+    public void ProjectSkillsComeFirstThenPersonalThenBuiltIn()
     {
         Write(_root, ".claude/skills/release/SKILL.md", "---\nname: release-notes\ndescription: Write release notes from merged PRs\n---\n# Release notes\nSteps...\n");
         Write(_root, ".butterknife/skills/migrations/SKILL.md", "How to add a database migration safely.\n");
+        Write(_home, ".claude/skills/standup/SKILL.md", "---\ndescription: Summarise yesterday's work\n---\nRun git log.\n");
         Directory.CreateDirectory(Path.Combine(_root, ".claude", "skills", "empty")); // no SKILL.md: ignored
 
-        var skills = CodeCommands.DiscoverSkills(_workspace);
+        var skills = CodeCommands.DiscoverSkills(_workspace, _home);
 
-        Assert.Equal(["migrations", "release-notes"], skills.Select(s => s.Name));
+        Assert.Equal(["migrations", "release-notes", "standup"], skills.Take(3).Select(s => s.Name));
         Assert.Equal("How to add a database migration safely.", skills[0].Description);
-        Assert.Equal(".claude/skills/release/SKILL.md", skills[1].Path);
+        Assert.Equal((CodeCommandSource.Project, ".claude/skills/release/SKILL.md"), (skills[1].Source, skills[1].Location));
+        Assert.Equal((CodeCommandSource.Personal, "~/.claude/skills/standup/SKILL.md"), (skills[2].Source, skills[2].Location));
+        Assert.Equal("# Release notes\nSteps...", skills[1].Text);
+        Assert.All(skills.Skip(3), s => Assert.Equal(CodeCommandSource.BuiltIn, s.Source));
+    }
 
-        var section = CodeCommands.SkillsSection(skills)!;
-        Assert.Contains("- release-notes: Write release notes from merged PRs (.claude/skills/release/SKILL.md)", section);
+    [Fact]
+    public void BuiltInSkillsShipWithTheApp()
+    {
+        var builtIns = CodeCommands.BuiltInSkills;
+
+        Assert.Equal(
+            ["debug-issue", "explore-project", "fix-failing-tests", "git-commit", "implement-feature", "refactor", "review-changes", "security-review", "write-docs", "write-tests"],
+            builtIns.Select(s => s.Name).Order());
+        Assert.All(builtIns, s =>
+        {
+            Assert.InRange(s.Description.Length, 20, CodeCommands.MaxDescriptionChars);
+            Assert.DoesNotContain("---", s.Text[..3]); // front matter stripped
+            Assert.Contains("#", s.Text);
+        });
+    }
+
+    [Fact]
+    public void AProjectSkillReplacesABuiltInOfTheSameName()
+    {
+        Write(_root, ".claude/skills/commits/SKILL.md", "---\nname: git-commit\ndescription: Our commit rules\n---\nUse Conventional Commits.\n");
+
+        var skill = CodeCommands.FindSkill(_workspace, "GIT-COMMIT", _home);
+
+        Assert.Equal((CodeCommandSource.Project, "Use Conventional Commits."), (skill!.Source, skill.Text));
+        Assert.Single(CodeCommands.DiscoverSkills(_workspace, _home), s => s.Name == "git-commit");
+    }
+
+    [Fact]
+    public void TheSkillsSectionListsNamesAndDescriptionsOnly()
+    {
+        var section = CodeCommands.SkillsSection([new CodeSkill("release-notes", "Write release notes", CodeCommandSource.Project, ".claude/skills/r/SKILL.md", "long text")])!;
+
+        Assert.Contains("read_skill", section);
+        Assert.Contains("- release-notes: Write release notes\n", section);
+        Assert.DoesNotContain("long text", section);
         Assert.Null(CodeCommands.SkillsSection([]));
     }
+
+    [Fact]
+    public async Task ReadSkillReturnsTheSkillOrSaysWhatExists()
+    {
+        var found = await CodeTools.Prepare(new ToolCall("c", CodeTools.ReadSkill, """{"name":"debug-issue"}"""), _workspace).RunAsync(null, CancellationToken.None);
+        Assert.False(found.IsError);
+        Assert.StartsWith("# Skill: debug-issue", found.Output);
+
+        var missing = await CodeTools.Prepare(new ToolCall("c", CodeTools.ReadSkill, """{"name":"nope"}"""), _workspace).RunAsync(null, CancellationToken.None);
+        Assert.True(missing.IsError);
+        Assert.Contains("explore-project", missing.Output);
+    }
+
+    [Fact]
+    public void TheSystemPromptListsTheBuiltInSkills()
+    {
+        var prompt = CodePrompt.Compose(_workspace, readOnly: false);
+
+        Assert.Contains("call read_skill", prompt);
+        Assert.All(CodeCommands.BuiltInSkills, s => Assert.Contains($"- {s.Name}: ", prompt));
+        Assert.DoesNotContain(CodeCommands.BuiltInSkills[0].Text, prompt); // only names and descriptions
+    }
+
+    [Fact]
+    public void ReadSkillIsOfferedInPlanModeToo() =>
+        Assert.Contains(CodeTools.Definitions(readOnly: true), t => t.Name == CodeTools.ReadSkill);
 
     [Theory]
     [InlineData("/review", "review", "")]

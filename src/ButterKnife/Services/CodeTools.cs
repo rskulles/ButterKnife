@@ -69,9 +69,9 @@ public sealed class ToolInvocation
 }
 
 /// <summary>
-/// The Code tab's tools. Kept to six so the schemas cost a small local model little context: read_file, list_files,
-/// grep (read-only, never asked), edit_file and write_file (file changes) and run_command (anything). File tools stay
-/// inside the workspace folder. Output is capped so one call cannot flood a small context window.
+/// The Code tab's tools. Kept few so the schemas cost a small local model little context: read_file, list_files,
+/// grep and read_skill (read-only, never asked), edit_file and write_file (file changes) and run_command (anything).
+/// File tools stay inside the workspace folder; read_skill reads any listed skill wherever it lives. Output is capped so one call cannot flood a small context window.
 /// </summary>
 public static class CodeTools
 {
@@ -81,6 +81,7 @@ public static class CodeTools
     public const string EditFile = "edit_file";
     public const string WriteFile = "write_file";
     public const string RunCommand = "run_command";
+    public const string ReadSkill = "read_skill";
 
     public const int DefaultReadLines = 1000;
     public const int MaxLineChars = 2000;
@@ -138,6 +139,13 @@ public static class CodeTools
               "content":{"type":"string","description":"The complete new content of the file"}
             },"required":["path","content"]}
             """),
+        ToolDefinition.Create(ReadSkill,
+            "Read a skill: step-by-step instructions for a kind of task, listed by name in the system prompt. Call it before starting a task that matches a skill.",
+            """
+            {"type":"object","properties":{
+              "name":{"type":"string","description":"The skill's name, as listed"}
+            },"required":["name"]}
+            """),
         ToolDefinition.Create(RunCommand,
             "Run a shell command in the project folder and return its output and exit code. Use it to build, run tests, use git and other command-line tools. Commands cannot read input; avoid interactive programs and long-running servers.",
             """
@@ -171,6 +179,7 @@ public static class CodeTools
                 EditFile when !readOnly => PrepareEdit(call, args, workspace),
                 WriteFile when !readOnly => PrepareWrite(call, args, workspace),
                 RunCommand => PrepareCommand(call, args, workspace),
+                ReadSkill => PrepareSkill(call, args, workspace),
                 EditFile or WriteFile => ToolInvocation.Invalid(call, call.Name, "Plan mode is on: files cannot be changed. Describe the change instead."),
                 _ => ToolInvocation.Invalid(call, call.Name, $"There is no tool called {call.Name}. Available tools: {string.Join(", ", Definitions(readOnly).Select(t => t.Name))}."),
             };
@@ -199,6 +208,7 @@ public static class CodeTools
             EditFile => ($"Edit {path}", "pencil-square", null),
             WriteFile => ($"Write {path}", "file-earmark-diff", null),
             RunCommand => ($"Run {Truncate((Arg("command") ?? "").ReplaceLineEndings(" "), 80)}", "terminal", Arg("command")),
+            ReadSkill => ($"Use skill {Arg("name")}", "journal-bookmark", null),
             _ => (call.Name, "exclamation-triangle", null),
         };
     }
@@ -509,6 +519,17 @@ public static class CodeTools
                 return new ToolResult(exists ? $"Wrote {relative} (+{diff.Added} −{diff.Removed} lines)." : $"Created {relative} ({LineDiff.SplitLines(content).Length} lines).", false, diff.ToUnified());
             })
         { Path = relative, Diff = diff };
+    }
+
+    // ---------------------------------------------------------------- read_skill
+
+    private static ToolInvocation PrepareSkill(ToolCall call, JsonElement args, CodeWorkspace workspace)
+    {
+        var name = RequireString(args, "name").Trim();
+        return new ToolInvocation(call, $"Use skill {name}", "journal-bookmark", ToolPermission.None,
+            (_, _) => Task.FromResult(CodeCommands.FindSkill(workspace, name) is { } skill
+                ? new ToolResult($"# Skill: {skill.Name}\n\n{skill.Text}", false)
+                : ToolResult.Fail($"There is no skill called {name}. Available: {string.Join(", ", CodeCommands.DiscoverSkills(workspace).Select(s => s.Name))}.")));
     }
 
     // ---------------------------------------------------------------- run_command

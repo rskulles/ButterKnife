@@ -766,14 +766,12 @@ else if (_allowed is true)
 
         var skills = CodeCommands.DiscoverSkills(folder);
         sb.Append("**Skills**\n\n");
-        if (skills.Count == 0)
-        {
-            sb.Append("None in this project. A skill is a folder with a `SKILL.md` in `.butterknife/skills/` or `.claude/skills/`; the model sees its name and description and reads the file when a task matches.\n");
-        }
         foreach (var skill in skills)
         {
-            sb.Append("- **").Append(skill.Name).Append("** ").Append(skill.Description).Append(" (`").Append(skill.Path).Append("`)\n");
+            sb.Append("- **").Append(skill.Name).Append("** ").Append(skill.Description);
+            sb.Append(skill.Source == CodeCommandSource.BuiltIn ? " *(built-in)*" : $" (`{skill.Location}`)").Append('\n');
         }
+        sb.Append("\nThe model sees each skill's name and description and reads the full skill when a task matches. Add your own as a folder with a `SKILL.md` in `.butterknife/skills/` or `.claude/skills/` (in the project, or in your home folder for every project); one with a built-in skill's name replaces it.\n");
         _items.Add(new CodeItem(ItemKind.Assistant).Append(sb.ToString()));
         _codeBlocksDirty = true;
         _ = ScrollAsync(force: true);
