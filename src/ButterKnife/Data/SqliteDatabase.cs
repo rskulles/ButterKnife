@@ -232,6 +232,42 @@ public sealed class SqliteDatabase
                     created_at     TEXT NOT NULL,
                     last_login_at  TEXT NULL
                 );
+
+                -- Code tab: an agent session in a project folder, and its transcript (user prompts, replies with their
+                -- tool calls, and tool results). Separate from chats: different shape, never searched or exported.
+                CREATE TABLE IF NOT EXISTS code_sessions (
+                    id              TEXT PRIMARY KEY,
+                    user_id         TEXT NOT NULL,
+                    title           TEXT NOT NULL,
+                    workspace       TEXT NOT NULL, -- absolute folder path on this computer
+                    backend         TEXT NOT NULL, -- connection id (GUID)
+                    model           TEXT NOT NULL,
+                    permission_mode TEXT NOT NULL,
+                    context_tokens  INTEGER NULL,
+                    context_window  INTEGER NULL,
+                    created_at      TEXT NOT NULL,
+                    updated_at      TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_code_sessions_user ON code_sessions(user_id, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS code_messages (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id   TEXT NOT NULL REFERENCES code_sessions(id) ON DELETE CASCADE,
+                    role         TEXT NOT NULL,
+                    content      TEXT NOT NULL,
+                    reasoning    TEXT NULL,
+                    tool_calls   TEXT NULL,    -- JSON array of {id, name, arguments} on an assistant message
+                    tool_call_id TEXT NULL,    -- on a tool result: the call it answers
+                    tool_name    TEXT NULL,
+                    is_error     INTEGER NOT NULL DEFAULT 0,
+                    diff         TEXT NULL,    -- on an edit's result: the change as unified diff lines, for display
+                    model        TEXT NULL,
+                    stats        TEXT NULL,
+                    created_at   TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_code_messages_session ON code_messages(session_id, id);
                 """, cancellationToken);
 
             // Databases created before these columns existed.
@@ -252,6 +288,9 @@ public sealed class SqliteDatabase
             await AddColumnIfMissingAsync(connection, "conversations", "pinned", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
             await AddColumnIfMissingAsync(connection, "conversations", "archived", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
             await AddColumnIfMissingAsync(connection, "conversations", "user_id", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, "code_sessions", "summary", "TEXT NULL", cancellationToken);
+            await AddColumnIfMissingAsync(connection, "code_messages", "display", "TEXT NULL", cancellationToken); // a slash command as typed
+            await AddColumnIfMissingAsync(connection, "code_sessions", "summary_through", "INTEGER NULL", cancellationToken);
             await ExecAsync(connection, "CREATE INDEX IF NOT EXISTS ix_conversations_user ON conversations(user_id, pinned DESC, updated_at DESC);", cancellationToken);
             await EnsureSearchIndexAsync(connection, cancellationToken);
 

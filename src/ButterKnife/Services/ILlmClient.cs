@@ -28,4 +28,10 @@ public interface ILlmClient
 
     /// <summary>Whether the model accepts image input: true/false when the backend reports it, null when it cannot tell us. Never throws for "unknown".</summary>
     Task<bool?> SupportsImagesAsync(string model, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether the model can call functions (Code tab): true/false when the backend reports it, null when it cannot
+    /// tell us (the default). Never throws for "unknown".
+    /// </summary>
+    Task<bool?> SupportsToolsAsync(string model, CancellationToken cancellationToken = default) => Task.FromResult<bool?>(null);
 }

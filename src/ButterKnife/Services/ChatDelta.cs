@@ -63,16 +63,22 @@ public enum FinishReason
     /// <summary>The output token limit was reached; the reply is cut off and can be continued.</summary>
     Length,
 
-    /// <summary>Anything else the backend reports (content filter, tool call, ...).</summary>
+    /// <summary>Anything else the backend reports (content filter, ...).</summary>
     Other,
+
+    /// <summary>The model stopped to call tools; the calls arrived as <see cref="ChatDelta.ToolCall"/> items.</summary>
+    ToolCalls,
 }
 
 /// <summary>
-/// One streamed item: a text delta, a reasoning ("thinking") delta for models that expose it, a finish reason, or a
-/// usage report (typically the last item). Any combination may be null.
+/// One streamed item: a text delta, a reasoning ("thinking") delta for models that expose it, a finish reason, a
+/// usage report (typically the last item), or a complete tool call (only when tools were offered; clients assemble
+/// streamed fragments before yielding it). Any combination may be null.
 /// </summary>
-public readonly record struct ChatDelta(string? Text, TokenUsage? Usage, string? Reasoning = null, FinishReason? Finish = null)
+public readonly record struct ChatDelta(string? Text, TokenUsage? Usage, string? Reasoning = null, FinishReason? Finish = null, ToolCall? ToolCall = null)
 {
+    public static ChatDelta FromToolCall(ToolCall call) => new(null, null, ToolCall: call);
+
     public static ChatDelta FromText(string text) => new(text, null);
 
     public static ChatDelta FromReasoning(string reasoning) => new(null, null, reasoning);

@@ -5,6 +5,9 @@ public enum ChatRole
     System,
     User,
     Assistant,
+
+    /// <summary>The result of a tool call (Code tab); carries <see cref="ChatMessage.ToolCallId"/> and <see cref="ChatMessage.ToolName"/>.</summary>
+    Tool,
 }
 
 /// <summary>An image attached to a message, held in memory as raw bytes. Sent to each backend in its native encoding.</summary>
@@ -55,6 +58,21 @@ public sealed record ChatMessage(ChatRole Role, string Content, IReadOnlyList<Ch
 
     public bool HasFiles => Files.Count > 0;
 
+    /// <summary>Functions an assistant message asked to call (Code tab). Empty for every other message.</summary>
+    public IReadOnlyList<ToolCall> ToolCalls { get; init; } = NoToolCalls;
+
+    public static readonly IReadOnlyList<ToolCall> NoToolCalls = Array.Empty<ToolCall>();
+
+    public bool HasToolCalls => ToolCalls.Count > 0;
+
+    /// <summary>For a <see cref="ChatRole.Tool"/> message: the call it answers and that call's function name.</summary>
+    public string? ToolCallId { get; init; }
+
+    public string? ToolName { get; init; }
+
+    /// <summary>For a <see cref="ChatRole.Tool"/> message: the tool failed or was refused (Anthropic sends it as is_error).</summary>
+    public bool IsError { get; init; }
+
     /// <summary>
     /// The message as the model receives it: each attached file as a named document block ahead of the text.
     /// Every backend gets the same plain-text shape, so it works with any server. Images are kept.
@@ -72,7 +90,7 @@ public sealed record ChatMessage(ChatRole Role, string Content, IReadOnlyList<Ch
             sb.Append("<document name=\"").Append(file.Name.Replace("\"", "'")).Append("\">\n").Append(file.Text).Append("\n</document>\n\n");
         }
         sb.Append(Content);
-        return new ChatMessage(Role, sb.ToString(), Images) { Id = Id, CreatedAt = CreatedAt, Reasoning = Reasoning, Model = Model, Stats = Stats };
+        return new ChatMessage(Role, sb.ToString(), Images) { Id = Id, CreatedAt = CreatedAt, Reasoning = Reasoning, Model = Model, Stats = Stats, ToolCalls = ToolCalls, ToolCallId = ToolCallId, ToolName = ToolName, IsError = IsError };
     }
 
     /// <summary>
@@ -90,6 +108,6 @@ public sealed record ChatMessage(ChatRole Role, string Content, IReadOnlyList<Ch
             ? "[1 image was attached here but omitted: this model cannot see images.]"
             : $"[{Images.Count} images were attached here but omitted: this model cannot see images.]";
         var content = Content.Length == 0 ? note : $"{Content}\n\n{note}";
-        return new ChatMessage(Role, content) { Files = Files };
+        return new ChatMessage(Role, content) { Files = Files, ToolCalls = ToolCalls, ToolCallId = ToolCallId, ToolName = ToolName, IsError = IsError };
     }
 }

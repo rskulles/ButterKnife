@@ -24,16 +24,24 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
         options ??= ChatOptions.Default;
         // temperature and max_tokens are standard. There is no standard thinking switch: chat_template_kwargs
         // enable_thinking is what vLLM and llama.cpp honour for Qwen3-style models, and other servers ignore it.
+        // Tool calls go back on the assistant message with their arguments as the JSON text the model wrote, and each
+        // result is a "tool" message naming the call it answers.
         var body = new ChatRequest(
             model,
-            messages.Select(m => new WireMessage(RoleName(m.Role), BuildContent(m))).ToArray(),
+            messages.Select(m => new WireMessage(
+                RoleName(m.Role),
+                BuildContent(m),
+                ToolCalls: m.HasToolCalls ? m.ToolCalls.Select(c => new WireToolCall(c.Id, "function", new WireFunction(c.Name, c.Arguments))).ToArray() : null,
+                ToolCallId: m.Role == ChatRole.Tool ? m.ToolCallId : null)).ToArray(),
             Stream: true,
             StreamOptions: new StreamOptions(IncludeUsage: true),
             Temperature: options.Temperature,
             MaxTokens: options.MaxTokens,
-            ChatTemplateKwargs: options.Think is { } think ? new ChatTemplateKwargs(think) : null);
+            ChatTemplateKwargs: options.Think is { } think ? new ChatTemplateKwargs(think) : null,
+            Tools: options.HasTools ? options.Tools!.Select(t => new WireTool("function", new WireToolFunction(t.Name, t.Description, t.Parameters))).ToArray() : null);
 
         var response = await PostStreamingAsync("chat/completions", body, cancellationToken);
+        var calls = new ToolCallAssembler();
 
         await foreach (var line in ReadLinesAsync(response, cancellationToken))
         {
@@ -50,7 +58,7 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
 
             if (payload == DoneSentinel)
             {
-                yield break;
+                break;
             }
 
             var chunk = JsonSerializer.Deserialize<ChatChunk>(payload, JsonOptions);
@@ -73,9 +81,20 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
                 yield return ChatDelta.FromText(delta);
             }
 
+            foreach (var fragment in choice?.Delta?.ToolCalls ?? [])
+            {
+                calls.Add(fragment.Index, fragment.Id, fragment.Function?.Name, fragment.Function?.Arguments);
+            }
+
             if (choice?.FinishReason is { } finish)
             {
-                yield return ChatDelta.FromFinish(finish == "stop" ? FinishReason.Stop : finish == "length" ? FinishReason.Length : FinishReason.Other);
+                // Calls stream in fragments; they are complete once the choice finishes.
+                foreach (var call in calls.Drain())
+                {
+                    yield return ChatDelta.FromToolCall(call);
+                }
+                yield return ChatDelta.FromFinish(finish == "tool_calls" || calls.Emitted ? FinishReason.ToolCalls
+                    : finish == "stop" ? FinishReason.Stop : finish == "length" ? FinishReason.Length : FinishReason.Other);
             }
 
             // With stream_options.include_usage the final chunk carries usage (and usually no choices).
@@ -83,6 +102,62 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
             {
                 yield return ChatDelta.FromUsage(new TokenUsage(usage.PromptTokens, usage.CompletionTokens));
             }
+        }
+
+        // A server that ends the stream without a finish_reason still gets its calls delivered.
+        foreach (var call in calls.Drain())
+        {
+            yield return ChatDelta.FromToolCall(call);
+        }
+    }
+
+    /// <summary>LM Studio lists "tool_use" in a model's capabilities; other OpenAI-style servers cannot tell us.</summary>
+    public override async Task<bool?> SupportsToolsAsync(string model, CancellationToken cancellationToken = default)
+    {
+        var info = await GetLmStudioModelAsync(model, cancellationToken);
+        return info?.Capabilities is { } capabilities ? capabilities.Contains("tool_use", StringComparer.OrdinalIgnoreCase) : null;
+    }
+
+    /// <summary>
+    /// Joins streamed tool-call fragments: the first fragment of a call carries its id and name, later ones append to
+    /// the arguments. Fragments are keyed by index; a server that omits the index starts a new call when the id changes.
+    /// </summary>
+    private sealed class ToolCallAssembler
+    {
+        private readonly List<(int? Index, string? Id, string Name, System.Text.StringBuilder Arguments)> _calls = [];
+
+        public bool Emitted { get; private set; }
+
+        public void Add(int? index, string? id, string? name, string? arguments)
+        {
+            var at = index is not null
+                ? _calls.FindIndex(c => c.Index == index)
+                : id is null || (_calls.Count > 0 && _calls[^1].Id == id) ? _calls.Count - 1 : -1;
+            if (at < 0)
+            {
+                _calls.Add((index, id, name ?? "", new System.Text.StringBuilder()));
+                at = _calls.Count - 1;
+            }
+
+            var call = _calls[at];
+            if (call.Id is null && id is not null)
+            {
+                call.Id = id;
+            }
+            if (call.Name.Length == 0 && !string.IsNullOrEmpty(name))
+            {
+                call.Name = name;
+            }
+            call.Arguments.Append(arguments);
+            _calls[at] = call;
+        }
+
+        public IReadOnlyList<ToolCall> Drain()
+        {
+            var done = _calls.Where(c => c.Name.Length > 0).Select(c => new ToolCall(c.Id ?? ToolCall.NewId(), c.Name, c.Arguments.ToString())).ToArray();
+            _calls.Clear();
+            Emitted |= done.Length > 0;
+            return done;
         }
     }
 
@@ -153,6 +228,7 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
         ChatRole.System => "system",
         ChatRole.User => "user",
         ChatRole.Assistant => "assistant",
+        ChatRole.Tool => "tool",
         _ => throw new ArgumentOutOfRangeException(nameof(role), role, null),
     };
 
@@ -163,13 +239,30 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
         [property: JsonPropertyName("stream_options")] StreamOptions? StreamOptions = null,
         double? Temperature = null,
         [property: JsonPropertyName("max_tokens")] int? MaxTokens = null,
-        [property: JsonPropertyName("chat_template_kwargs")] ChatTemplateKwargs? ChatTemplateKwargs = null);
+        [property: JsonPropertyName("chat_template_kwargs")] ChatTemplateKwargs? ChatTemplateKwargs = null,
+        WireTool[]? Tools = null);
+
+    private sealed record WireTool(string Type, WireToolFunction Function);
+
+    private sealed record WireToolFunction(string Name, string Description, JsonElement Parameters);
+
+    private sealed record WireToolCall(string Id, string Type, WireFunction Function);
+
+    private sealed record WireFunction(string Name, string Arguments);
+
+    private sealed record ToolCallFragment(int? Index, string? Id, FunctionFragment? Function);
+
+    private sealed record FunctionFragment(string? Name, string? Arguments);
 
     private sealed record ChatTemplateKwargs([property: JsonPropertyName("enable_thinking")] bool EnableThinking);
 
     private sealed record StreamOptions([property: JsonPropertyName("include_usage")] bool IncludeUsage);
 
-    private sealed record WireMessage(string Role, object Content);
+    private sealed record WireMessage(
+        string Role,
+        object Content,
+        [property: JsonPropertyName("tool_calls")] WireToolCall[]? ToolCalls = null,
+        [property: JsonPropertyName("tool_call_id")] string? ToolCallId = null);
 
     private sealed record TextPart(string Text)
     {
@@ -189,11 +282,15 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
         [property: JsonPropertyName("prompt_tokens")] int? PromptTokens,
         [property: JsonPropertyName("completion_tokens")] int? CompletionTokens);
 
-    private sealed record LmStudioModel([property: JsonPropertyName("max_context_length")] int? MaxContextLength, string? Type);
+    private sealed record LmStudioModel([property: JsonPropertyName("max_context_length")] int? MaxContextLength, string? Type, string[]? Capabilities = null);
 
     private sealed record Choice(Delta? Delta, [property: JsonPropertyName("finish_reason")] string? FinishReason);
 
-    private sealed record Delta(string? Content, [property: JsonPropertyName("reasoning_content")] string? ReasoningContent, string? Reasoning);
+    private sealed record Delta(
+        string? Content,
+        [property: JsonPropertyName("reasoning_content")] string? ReasoningContent,
+        string? Reasoning,
+        [property: JsonPropertyName("tool_calls")] ToolCallFragment[]? ToolCalls = null);
 
     private sealed record ErrorBody(string? Message);
 

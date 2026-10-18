@@ -22,17 +22,23 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
         var requestOptions = Connection.ContextWindow is null && options.Temperature is null && options.MaxTokens is null
             ? null
             : new RequestOptions(Connection.ContextWindow, options.Temperature, options.MaxTokens);
+        // Tools ride as OpenAI-style "function" tools; an assistant turn's calls go back with their arguments as an
+        // object, and a tool result names its function in tool_name (Ollama 0.9+; older servers ignore it).
         var body = new ChatRequest(
             model,
             messages.Select(m => new WireMessage(
                 RoleName(m.Role),
                 m.Content,
-                m.HasImages ? m.Images.Select(i => i.Base64).ToArray() : null)).ToArray(),
+                m.HasImages ? m.Images.Select(i => i.Base64).ToArray() : null,
+                ToolCalls: m.HasToolCalls ? m.ToolCalls.Select(c => new WireToolCall(new WireFunction(c.Name, c.TryParseArguments() ?? EmptyObject))).ToArray() : null,
+                ToolName: m.Role == ChatRole.Tool ? m.ToolName : null)).ToArray(),
             Stream: true,
             Options: requestOptions,
-            Think: options.Think);
+            Think: options.Think,
+            Tools: options.HasTools ? options.Tools!.Select(t => new WireTool("function", new WireToolFunction(t.Name, t.Description, t.Parameters))).ToArray() : null);
 
         var response = await PostStreamingAsync("api/chat", body, cancellationToken);
+        var calledTools = false;
 
         await foreach (var line in ReadLinesAsync(response, cancellationToken))
         {
@@ -62,9 +68,25 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
                 yield return ChatDelta.FromText(chunk.Message.Content);
             }
 
+            // Ollama sends each call whole (never in fragments), usually in a chunk before the done chunk.
+            foreach (var call in chunk.Message?.ToolCalls ?? [])
+            {
+                if (call.Function is { Name.Length: > 0 } function)
+                {
+                    calledTools = true;
+                    var arguments = function.Arguments.ValueKind == JsonValueKind.String ? function.Arguments.GetString() ?? "{}"
+                        : function.Arguments.ValueKind == JsonValueKind.Undefined ? "{}" : function.Arguments.GetRawText();
+                    yield return ChatDelta.FromToolCall(new ToolCall(call.Id ?? ToolCall.NewId(), function.Name, arguments));
+                }
+            }
+
             if (chunk.Done)
             {
-                if (chunk.DoneReason is { } reason)
+                if (calledTools)
+                {
+                    yield return ChatDelta.FromFinish(FinishReason.ToolCalls); // Ollama still says "stop" here
+                }
+                else if (chunk.DoneReason is { } reason)
                 {
                     yield return ChatDelta.FromFinish(reason == "stop" ? FinishReason.Stop : reason == "length" ? FinishReason.Length : FinishReason.Other);
                 }
@@ -120,6 +142,15 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
         return null;
     }
 
+    /// <summary>/api/show lists "tools" in capabilities for models whose template supports function calling (Ollama 0.6+).</summary>
+    public override async Task<bool?> SupportsToolsAsync(string model, CancellationToken cancellationToken = default)
+    {
+        var shown = await TryPostJsonAsync<ShowResponse, ShowRequest>("api/show", new ShowRequest(model), cancellationToken);
+        return shown?.Capabilities is { } capabilities
+            ? capabilities.Contains("tools", StringComparer.OrdinalIgnoreCase)
+            : null;
+    }
+
     /// <summary>/api/show lists "vision" in capabilities for multimodal models (Ollama 0.6+); older servers omit the array, which is "unknown".</summary>
     public override async Task<bool?> SupportsImagesAsync(string model, CancellationToken cancellationToken = default)
     {
@@ -137,17 +168,34 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
         ChatRole.System => "system",
         ChatRole.User => "user",
         ChatRole.Assistant => "assistant",
+        ChatRole.Tool => "tool",
         _ => throw new ArgumentOutOfRangeException(nameof(role), role, null),
     };
 
-    private sealed record ChatRequest(string Model, WireMessage[] Messages, bool Stream, RequestOptions? Options = null, bool? Think = null);
+    private static readonly JsonElement EmptyObject = JsonDocument.Parse("{}").RootElement.Clone();
+
+    private sealed record ChatRequest(string Model, WireMessage[] Messages, bool Stream, RequestOptions? Options = null, bool? Think = null, WireTool[]? Tools = null);
+
+    private sealed record WireTool(string Type, WireToolFunction Function);
+
+    private sealed record WireToolFunction(string Name, string Description, JsonElement Parameters);
+
+    private sealed record WireToolCall(WireFunction? Function, string? Id = null);
+
+    private sealed record WireFunction(string Name, JsonElement Arguments);
 
     private sealed record RequestOptions(
         [property: JsonPropertyName("num_ctx")] int? NumCtx,
         double? Temperature,
         [property: JsonPropertyName("num_predict")] int? NumPredict);
 
-    private sealed record WireMessage(string Role, string Content, string[]? Images = null, string? Thinking = null);
+    private sealed record WireMessage(
+        string Role,
+        string Content,
+        string[]? Images = null,
+        string? Thinking = null,
+        [property: JsonPropertyName("tool_calls")] WireToolCall[]? ToolCalls = null,
+        [property: JsonPropertyName("tool_name")] string? ToolName = null);
 
     private sealed record ChatChunk(
         WireMessage? Message,

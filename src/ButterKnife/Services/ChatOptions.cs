@@ -14,6 +14,14 @@ public sealed record ChatOptions(double? Temperature = null, int? MaxTokens = nu
 
     public bool IsDefault => Temperature is null && MaxTokens is null && Think is null;
 
+    /// <summary>
+    /// Functions offered to the model for this request (Code tab). Not part of a conversation's stored settings;
+    /// null or empty sends no tools, which is what chat does.
+    /// </summary>
+    public IReadOnlyList<ToolDefinition>? Tools { get; init; }
+
+    public bool HasTools => Tools is { Count: > 0 };
+
     /// <summary>Clamped and rounded so a slider cannot store 0.30000000000000004.</summary>
     public static double? NormalizeTemperature(double? value) =>
         value is { } t ? Math.Round(Math.Clamp(t, MinTemperature, MaxTemperature), 2) : null;

@@ -168,6 +168,7 @@ public sealed class SqliteUserStore(SqliteDatabase db) : IUserStore
         cmd.Transaction = (SqliteTransaction)tx;
         cmd.CommandText = """
             DELETE FROM conversations WHERE user_id = $id; -- messages, images and files cascade
+            DELETE FROM code_sessions WHERE user_id = $id; -- code messages cascade
             DELETE FROM users WHERE id = $id AND is_owner = 0;
             """;
         cmd.Parameters.AddWithValue("$id", id.ToString("D"));
