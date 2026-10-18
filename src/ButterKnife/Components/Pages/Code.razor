@@ -1,0 +1,1531 @@
+@page "/code"
+@page "/code/{Id:guid}"
+@using System.Diagnostics
+@using System.Text
+@using ButterKnife.Options
+@using Microsoft.Extensions.Options
+@implements IAsyncDisposable
+@implements ICodeAgentObserver
+@inject ICodeSessionStore Store
+@inject CodeSessionEvents Events
+@inject ConnectionEvents ConnectionEvents
+@inject ILlmClientRegistry Registry
+@inject ModelCatalog Catalog
+@inject MarkdownRenderer Markdown
+@inject ChatTitler Titler
+@inject CurrentUser CurrentUser
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+@inject IOptions<LlmOptions> LlmOptions
+
+<PageTitle>@(_title is null ? "Code · ButterKnife" : $"{_title} · Code · ButterKnife")</PageTitle>
+
+@if (_allowed is false)
+{
+    <div class="m-auto text-center text-body-secondary" style="max-width: 32rem">
+        <i class="bi bi-terminal fs-1 d-block mb-2" aria-hidden="true"></i>
+        <p class="mb-1">Code works on files and runs commands on this computer, so it is for administrators connected from home.</p>
+        <p class="small"><a href="">Back to chat</a></p>
+    </div>
+}
+else if (_allowed is true)
+{
+<div class="code-frame d-flex flex-column gap-2 flex-grow-1">
+    <header class="d-flex flex-wrap align-items-center gap-2">
+        @* The folder is fixed once the session has started; before that it opens the picker. *@
+        <button type="button" class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center gap-1 text-truncate code-folder"
+                title="@(_workspace ?? "Choose the project folder")" disabled="@(_sessionId is not null || _isRunning)"
+                @onclick="OpenPicker">
+            <i class="bi bi-folder2" aria-hidden="true"></i>
+            <span class="text-truncate">@(_workspace is null ? "Choose a folder" : FolderName(_workspace))</span>
+        </button>
+
+        <label class="visually-hidden" for="code-model">Model</label>
+        <select id="code-model" class="form-select form-select-sm w-auto" value="@(Selected is null && _models.Count == 0 ? "" : _selectedKey)"
+                @onchange="OnModelChangedAsync" disabled="@_isRunning" style="max-width: 18rem">
+            @if (_models.Count == 0)
+            {
+                <option value="">@(_loadingModels ? "Loading models…" : "No models")</option>
+            }
+            @foreach (var group in _models.GroupBy(m => m.ConnectionId))
+            {
+                <optgroup label="@group.First().ConnectionName">
+                    @foreach (var m in group)
+                    {
+                        <option value="@m.Key">@m.Model</option>
+                    }
+                </optgroup>
+            }
+            @if (Selected is null && _selectedKey.Length > 0 && _models.Count > 0)
+            {
+                <option value="@_selectedKey" disabled>@SelectedModelName (unavailable)</option>
+            }
+        </select>
+
+        <label class="visually-hidden" for="code-mode">Permissions</label>
+        <select id="code-mode" class="form-select form-select-sm w-auto" value="@_mode" @onchange="OnModeChangedAsync"
+                title="@ModeDescription(_mode)">
+            <option value="@CodePermissionMode.Ask">Ask before edits</option>
+            <option value="@CodePermissionMode.AcceptEdits">Accept edits</option>
+            <option value="@CodePermissionMode.Plan">Plan (read only)</option>
+            <option value="@CodePermissionMode.Auto">Auto (never ask)</option>
+        </select>
+
+        <div class="ms-auto d-flex align-items-center gap-2">
+            @if (_contextTokens is { } used)
+            {
+                <span class="small @(ContextFraction > 0.8 ? "text-warning-emphasis" : "text-body-secondary") text-nowrap"
+                      title="@ContextTitle">
+                    <i class="bi bi-memory me-1" aria-hidden="true"></i>@FormatTokens(used)@(_contextWindow is { } window ? $" / {FormatTokens(window)}" : "")
+                </span>
+            }
+            @if (_sessionId is not null)
+            {
+                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(!CanCompact)" @onclick="CompactNowAsync"
+                        title="Summarise the earlier prompts so the session takes less context. The transcript stays as it is.">
+                    <i class="bi bi-arrows-collapse" aria-hidden="true"></i><span class="d-none d-md-inline ms-1">Compact</span>
+                </button>
+            }
+        </div>
+    </header>
+
+    @if (_mode == CodePermissionMode.Auto)
+    {
+        <div class="alert alert-warning py-1 px-2 small mb-0">
+            <i class="bi bi-exclamation-triangle me-1" aria-hidden="true"></i>Auto: the model changes files and runs commands without asking.
+        </div>
+    }
+    @if (Selected is not null && _supportsTools is false)
+    {
+        <div class="alert alert-warning py-1 px-2 small mb-0">
+            @Selected.Model does not support tool calling, which Code needs. Pick another model (for example a Qwen, Llama 3.1+ or Mistral model).
+        </div>
+    }
+    else if (_contextWindow is { } small && small < SmallWindow && Selected is not null)
+    {
+        <div class="alert alert-info py-1 px-2 small mb-0">
+            @Selected.Model runs with a @FormatTokens(small)-token window, which a coding session fills quickly.
+            Set a larger <strong>context window</strong> on the connection under <a href="settings/connections">Settings → Connections</a> if the model and your hardware allow it.
+        </div>
+    }
+
+    @if (_showPicker)
+    {
+        @FolderPicker
+    }
+
+    <div class="code-messages overflow-auto p-2 border bg-body" @ref="_messagesElement">
+        @if (_items.Count == 0 && !_showPicker)
+        {
+            <div class="text-center text-body-secondary mt-5 px-3">
+                @if (_workspace is null)
+                {
+                    <p>Choose a project folder to start.</p>
+                    <button type="button" class="btn btn-primary btn-sm" @onclick="OpenPicker"><i class="bi bi-folder2-open me-1" aria-hidden="true"></i>Choose a folder</button>
+                }
+                else
+                {
+                    <p class="mb-1">Working in <code>@_workspace</code></p>
+                    @if (_instructionFile is not null)
+                    {
+                        <p class="small mb-1"><i class="bi bi-journal-text me-1" aria-hidden="true"></i>The model reads the project's <code>@_instructionFile</code>.</p>
+                    }
+                    <p class="small">Ask for a change, a fix, a test, or an explanation of the code.</p>
+                }
+            </div>
+        }
+
+        @{ var checkpoint = CheckpointItem; }
+        @foreach (var item in _items)
+        {
+            @if (ReferenceEquals(item, checkpoint))
+            {
+                <div class="code-checkpoint text-center small pt-2 my-2">
+                    <button type="button" class="btn btn-link btn-sm p-0" @onclick="() => _showSummary = !_showSummary">
+                        @_summaryThrough earlier message@(_summaryThrough == 1 ? "" : "s") compacted into a summary — @(_showSummary ? "hide" : "show")
+                    </button>
+                    @if (_showSummary && _summary is not null)
+                    {
+                        <div class="msg-markdown text-start text-body mt-2 p-2 rounded bg-warning-subtle">@((MarkupString)Markdown.ToHtml(_summary))</div>
+                    }
+                </div>
+            }
+            @switch (item.Kind)
+            {
+                case ItemKind.User:
+                    <div class="msg msg-user ms-auto mb-3">
+                        <div class="msg-bubble px-3 py-2 rounded-3 bg-primary-subtle prewrap text-break @(item.Expansion is null ? "" : "font-monospace")">@item.Text.ToString()</div>
+                        @if (item.Expansion is { } expansion)
+                        {
+                            <details class="small text-end mt-1">
+                                <summary class="text-body-secondary">What the model was sent</summary>
+                                <div class="prewrap text-start text-body-secondary border-start ps-2 mt-1">@expansion</div>
+                            </details>
+                        }
+                    </div>
+                    break;
+
+                case ItemKind.Assistant:
+                    <div class="mb-2">
+                        @if (item.Reasoning.Length > 0)
+                        {
+                            <details class="msg-thinking small mb-1" open="@(item.IsStreaming && item.Text.Length == 0)">
+                                <summary class="text-body-secondary"><i class="bi bi-lightbulb me-1" aria-hidden="true"></i>@(item.IsStreaming && item.Text.Length == 0 ? "Thinking…" : "Thought")</summary>
+                                <div class="prewrap text-body-secondary mt-1 px-2">@item.Reasoning.ToString()</div>
+                            </details>
+                        }
+                        @if (item.Text.Length > 0)
+                        {
+                            <div class="msg-markdown text-break">@item.Html(Markdown)@(item.IsStreaming ? "▍" : "")</div>
+                        }
+                        @if (item.IsStreaming)
+                        {
+                            <ButterKnifeThrobber Stats="item.GetStats" />
+                        }
+                        else if (item.Note is { } note)
+                        {
+                            <div class="small text-warning-emphasis">@note</div>
+                        }
+                    </div>
+                    break;
+
+                case ItemKind.Tool:
+                    @ToolRow(item)
+                    break;
+            }
+        }
+        @if (_compacting)
+        {
+            <div class="small text-body-secondary mb-2" role="status">
+                <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Summarising earlier prompts to make room in the context…
+            </div>
+        }
+    </div>
+
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger py-1 px-2 small mb-0 d-flex align-items-center gap-2" role="alert">
+            <span class="flex-grow-1">@_error</span>
+            <button type="button" class="btn-close" style="font-size: 0.6rem" aria-label="Dismiss" @onclick="() => _error = null"></button>
+        </div>
+    }
+
+    <footer class="d-flex gap-2 align-items-end position-relative">
+        @if (MenuItems is { Count: > 0 } menu)
+        {
+            @* Slash commands matching what has been typed: arrows move, Enter or a click picks, Esc closes. *@
+            <div class="code-command-menu list-group shadow position-absolute bottom-100 start-0 mb-1" role="listbox" aria-label="Commands">
+                @for (var i = 0; i < menu.Count; i++)
+                {
+                    var command = menu[i];
+                    var index = i;
+                    <button type="button" role="option" aria-selected="@(index == _menuIndex)"
+                            class="list-group-item list-group-item-action py-1 small d-flex gap-2 align-items-baseline @(index == _menuIndex ? "active" : "")"
+                            @onmousedown:preventDefault @onclick="() => PickCommand(command)">
+                        <span class="font-monospace text-nowrap">/@command.Name</span>
+                        <span class="text-truncate @(index == _menuIndex ? "" : "text-body-secondary")">@command.Description</span>
+                        @if (command.Source != CodeCommandSource.BuiltIn)
+                        {
+                            <span class="ms-auto badge @(index == _menuIndex ? "text-bg-light" : "text-bg-secondary")">@(command.Source == CodeCommandSource.Project ? "project" : "personal")</span>
+                        }
+                    </button>
+                }
+            </div>
+        }
+        <label class="visually-hidden" for="code-input">Message</label>
+        <textarea id="code-input" class="form-control" rows="2" @ref="_inputElement" @bind="_input" @bind:event="oninput" @bind:after="OnInputChanged"
+                  @onkeydown="OnComposerKey" role="combobox" aria-expanded="@(MenuItems is { Count: > 0 })" aria-autocomplete="list"
+                  placeholder="@(_workspace is null ? "Choose a folder first" : "Ask for a change, or type / for commands (Enter to send, Shift+Enter for a new line)")"
+                  disabled="@(_workspace is null)"></textarea>
+        @if (_isRunning)
+        {
+            <button class="btn btn-danger" @onclick="Stop" title="Stop (Esc)" aria-label="Stop"><i class="bi bi-stop-btn" aria-hidden="true"></i></button>
+        }
+        else
+        {
+            <button class="btn btn-primary" @onclick="SendAsync" disabled="@(!CanSend)" title="Send (Enter)" aria-label="Send"><i class="bi bi-arrow-bar-up" aria-hidden="true"></i></button>
+        }
+    </footer>
+</div>
+}
+
+@code {
+    // ---------------------------------------------------------------- core: state, lifecycle, selection
+    private static readonly TimeSpan RenderInterval = TimeSpan.FromMilliseconds(50);
+    private const int SmallWindow = 16_384;
+    private const int MaxTitleLength = 60;
+    private const int MaxLiveOutputChars = 60_000;
+
+    [Parameter] public Guid? Id { get; set; }
+
+    /// <summary>Null until checked; false for anyone who may not administer from where they are (see CurrentUser).</summary>
+    private bool? _allowed;
+    private Guid _userId;
+
+    private Guid? _sessionId;
+    private string? _title;
+    private string? _workspace;
+    private string? _instructionFile;
+    private CodePermissionMode _mode = CodePermissionMode.Ask;
+
+    private List<ModelDescriptor> _models = [];
+    private string _selectedKey = "";
+    private bool _loadingModels;
+    private bool? _supportsTools;
+    private int? _contextWindow;
+    private int? _contextTokens;
+    private readonly Dictionary<string, (bool? Tools, int? Window)> _modelInfo = [];
+
+    /// <summary>The compaction checkpoint (see CodeCompactor): a summary sent in place of the first _summaryThrough messages.</summary>
+    private string? _summary;
+    private int _summaryThrough;
+    private bool _compacting;
+    private bool _showSummary;
+
+    /// <summary>What the transcript shows, and what the model is sent (the stored messages, in order).</summary>
+    private readonly List<CodeItem> _items = [];
+    private List<ChatMessage> _history = [];
+
+    private string _input = "";
+    private string? _error;
+    private bool _isRunning;
+    private bool _titlePending;
+    private CancellationTokenSource? _run;
+    private readonly CancellationTokenSource _disposed = new();
+
+    /// <summary>The running agent, so a mode change during a turn applies to the calls still to come.</summary>
+    private CodeAgent? _agent;
+
+    /// <summary>Command prefixes allowed "always" in this page's lifetime; carried from turn to turn.</summary>
+    private readonly HashSet<string> _allowedCommands = new(StringComparer.Ordinal);
+
+    private CodeItem? _current;
+    private long _lastRender;
+    private bool _codeBlocksDirty;
+
+    private ElementReference _messagesElement;
+    private ElementReference _inputElement;
+    private IJSObjectReference? _js;
+    private DotNetObjectReference<Code>? _self;
+
+    private ModelDescriptor? Selected => _models.FirstOrDefault(m => m.Key == _selectedKey);
+
+    private string SelectedModelName => _selectedKey[(_selectedKey.IndexOf("::", StringComparison.Ordinal) + 2)..];
+
+    private bool CanSend => !_isRunning && _workspace is not null && Selected is not null && _supportsTools is not false && !string.IsNullOrWhiteSpace(_input);
+
+    /// <summary>Prompts kept verbatim by a compaction: Llm:CompactKeepRecentTurns counts chat messages, so half as many prompts.</summary>
+    private int KeepRecentPrompts => Math.Max(1, LlmOptions.Value.CompactKeepRecentTurns / 2);
+
+    private bool CanCompact =>
+        !_isRunning && _sessionId is not null && Selected is not null && CodeCompactor.FindCheckpoint(_history, _summaryThrough, KeepRecentPrompts) is not null;
+
+    /// <summary>The first prompt after the checkpoint, where the divider goes.</summary>
+    private CodeItem? CheckpointItem =>
+        _summaryThrough > 0 ? _items.FirstOrDefault(i => i.Kind == ItemKind.User && i.MessageIndex >= _summaryThrough) : null;
+
+    private string ContextTitle =>
+        "Tokens in the last request (prompt + reply)" + (_contextWindow is null ? "; the model's window is unknown" : " out of the model's window")
+        + (_summaryThrough > 0 ? $". {_summaryThrough} earlier messages are compacted into a summary." : "");
+
+    private double ContextFraction => _contextTokens is { } used && _contextWindow is { } window and > 0 ? (double)used / window : 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await CurrentUser.GetAsync(_disposed.Token);
+        if (user is null)
+        {
+            Nav.NavigateTo("login", forceLoad: true);
+            return;
+        }
+        _userId = user.Id;
+        _allowed = await CurrentUser.CanAdministerAsync(_disposed.Token);
+        if (_allowed is not true)
+        {
+            return;
+        }
+
+        ConnectionEvents.Changed += OnConnectionsChanged;
+        _ = InvokeAsync(async () =>
+        {
+            await RefreshModelsAsync();
+            StateHasChanged();
+        });
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_allowed is not true || (Id == _sessionId && Id is not null))
+        {
+            return;
+        }
+
+        Stop();
+        _items.Clear();
+        _history = [];
+        _error = null;
+        _sessionId = Id;
+        _title = null;
+        _contextTokens = null;
+        _summary = null;
+        _summaryThrough = 0;
+        _showSummary = false;
+        _titlePending = false;
+        _allowedCommands.Clear();
+        _showPicker = false;
+
+        if (Id is not { } id)
+        {
+            // A new session starts in the folder of the most recent one; the picker is a click away.
+            _mode = CodePermissionMode.Ask;
+            _recent = await Store.RecentWorkspacesAsync(_userId, cancellationToken: _disposed.Token);
+            SetWorkspace(_recent.FirstOrDefault(Directory.Exists));
+            if (_workspace is null)
+            {
+                OpenPicker();
+            }
+            return;
+        }
+
+        var session = await Store.GetAsync(id, _userId, _disposed.Token);
+        if (session is null)
+        {
+            _sessionId = null;
+            Nav.NavigateTo("code", replace: true);
+            return;
+        }
+
+        _title = session.Title;
+        _mode = session.Mode;
+        _contextTokens = session.ContextTokens;
+        _contextWindow = session.ContextWindow;
+        SetWorkspace(session.Workspace);
+        if (_workspace is null)
+        {
+            _error = $"The folder {session.Workspace} no longer exists. Start a new session to work elsewhere.";
+        }
+        _selectedKey = ModelDescriptor.MakeKey(session.ConnectionId, session.Model);
+        _history = session.Entries.Select(e => e.Message).ToList();
+        _summary = session.Summary;
+        _summaryThrough = _summary is null ? 0 : Math.Min(session.SummaryThrough, _history.Count);
+        for (var i = 0; i < session.Entries.Count; i++)
+        {
+            AddLoaded(session.Entries[i], i);
+        }
+        _codeBlocksDirty = true;
+        ReconcileSelection();
+        _ = RefreshModelInfoAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_allowed is not true)
+        {
+            return;
+        }
+
+        if (_js is null)
+        {
+            // Shares the chat page's module: Enter to send, Esc to stop, sticky auto-scroll and code block highlighting.
+            _js = await Js.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Chat.razor.js");
+            _self = DotNetObjectReference.Create(this);
+            await _js.InvokeVoidAsync("wireInput", _inputElement, _self);
+            await _js.InvokeVoidAsync("wireShortcuts", _self);
+            await _js.InvokeVoidAsync("wireScroll", _messagesElement);
+            await ScrollAsync(force: true);
+        }
+
+        if (_codeBlocksDirty && !_isRunning)
+        {
+            _codeBlocksDirty = false;
+            try
+            {
+                await _js.InvokeVoidAsync("enhanceCodeBlocks", _messagesElement);
+                await ScrollAsync(force: false);
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+
+    [JSInvokable]
+    public Task SendFromKeyboardAsync()
+    {
+        // Enter on a partly typed command fills in the highlighted one; Enter again (or on a complete name) sends.
+        if (MenuItems is { Count: > 0 } menu && !menu.Any(c => string.Equals("/" + c.Name, _input.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            PickCommand(menu[Math.Clamp(_menuIndex, 0, menu.Count - 1)]);
+            StateHasChanged();
+            return Task.CompletedTask;
+        }
+        return SendAsync();
+    }
+
+    [JSInvokable]
+    public Task OnShortcutAsync(string action)
+    {
+        switch (action)
+        {
+            case "stop" when MenuItems is { Count: > 0 }:
+                _menuDismissed = true;
+                StateHasChanged();
+                break;
+            case "stop" when _isRunning:
+                Stop();
+                break;
+            case "new-chat" when _sessionId is not null:
+                Nav.NavigateTo("code");
+                break;
+        }
+        return Task.CompletedTask;
+    }
+
+    private void Stop() => _run?.Cancel();
+
+    private async Task RefreshModelsAsync()
+    {
+        _loadingModels = true;
+        try
+        {
+            var result = await Catalog.GetModelsAsync(_disposed.Token);
+            _models = result.Models.ToList();
+            ReconcileSelection();
+            await RefreshModelInfoAsync();
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loadingModels = false;
+        }
+    }
+
+    /// <summary>Keeps the session's model if it still exists; otherwise the default (connection default, then the first model).</summary>
+    private void ReconcileSelection()
+    {
+        if (_models.Count == 0 || Selected is not null)
+        {
+            return;
+        }
+        if (_sessionId is null || _selectedKey.Length == 0)
+        {
+            _selectedKey = (_models.FirstOrDefault(m => m.IsDefault) ?? _models[0]).Key;
+        }
+    }
+
+    private void OnConnectionsChanged() =>
+        _ = InvokeAsync(async () =>
+        {
+            _modelInfo.Clear();
+            await RefreshModelsAsync();
+            StateHasChanged();
+        });
+
+    private async Task OnModelChangedAsync(ChangeEventArgs e)
+    {
+        _selectedKey = e.Value?.ToString() ?? "";
+        if (_sessionId is { } id && Selected is { } model)
+        {
+            await Store.SetModelAsync(id, model.ConnectionId, model.Model, _disposed.Token);
+        }
+        await RefreshModelInfoAsync();
+    }
+
+    /// <summary>Asks the selected model's connection whether it can call tools and how large its window is; cached per model.</summary>
+    private async Task RefreshModelInfoAsync()
+    {
+        if (Selected is not { } model)
+        {
+            _supportsTools = null;
+            return;
+        }
+        if (!_modelInfo.TryGetValue(model.Key, out var info))
+        {
+            try
+            {
+                var client = await Registry.GetAsync(model.ConnectionId, _disposed.Token);
+                info = (await client.SupportsToolsAsync(model.Model, _disposed.Token), await client.GetContextWindowAsync(model.Model, _disposed.Token));
+                _modelInfo[model.Key] = info;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                info = (null, null);
+            }
+        }
+        if (Selected?.Key == model.Key)
+        {
+            _supportsTools = info.Tools;
+            _contextWindow = info.Window ?? _contextWindow;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task OnModeChangedAsync(ChangeEventArgs e)
+    {
+        if (!Enum.TryParse<CodePermissionMode>(e.Value?.ToString(), out var mode))
+        {
+            return;
+        }
+        _mode = mode;
+        if (_agent is not null)
+        {
+            _agent.Mode = mode;
+        }
+        if (_sessionId is { } id)
+        {
+            await Store.SetModeAsync(id, mode, _disposed.Token);
+        }
+    }
+
+    private static string ModeDescription(CodePermissionMode mode) => mode switch
+    {
+        CodePermissionMode.Ask => "Asks before every file change and every command",
+        CodePermissionMode.AcceptEdits => "Changes files without asking; still asks before commands",
+        CodePermissionMode.Plan => "Reads and plans only: files cannot be changed; asks before commands",
+        CodePermissionMode.Auto => "Never asks: changes files and runs commands on its own",
+        _ => "",
+    };
+
+    private static string FolderName(string path) => Path.GetFileName(Path.TrimEndingDirectorySeparator(path)) is { Length: > 0 } name ? name : path;
+
+    private static string FormatTokens(int tokens) => tokens >= 1000 ? $"{tokens / 1000.0:0.#}k" : tokens.ToString();
+
+    private static string MakeTitle(string prompt)
+    {
+        var line = prompt.Trim().Split('\n', 2)[0].Trim();
+        return line.Length <= MaxTitleLength ? line : line[..MaxTitleLength].TrimEnd() + "…";
+    }
+
+    // ---------------------------------------------------------------- folder picker
+    private bool _showPicker;
+    private string _browsePath = "";
+    private string _pathInput = "";
+    private IReadOnlyList<string> _browseFolders = [];
+    private IReadOnlyList<string> _recent = [];
+    private string? _pickerError;
+
+    private void SetWorkspace(string? path)
+    {
+        if (path is null || !Directory.Exists(path))
+        {
+            _workspace = null;
+            _instructionFile = null;
+            _commands = CodeCommands.BuiltIns;
+            return;
+        }
+        _workspace = path;
+        _instructionFile = CodePrompt.ProjectInstructions(new CodeWorkspace(path))?.File;
+        _commands = CodeCommands.Discover(new CodeWorkspace(path));
+    }
+
+    private void OpenPicker()
+    {
+        _showPicker = true;
+        _pickerError = null;
+        Browse(_workspace ?? _recent.FirstOrDefault(Directory.Exists) ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+    }
+
+    private void Browse(string path)
+    {
+        var full = path.Trim();
+        if (full.StartsWith('~'))
+        {
+            full = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) + full[1..];
+        }
+        if (!Path.IsPathRooted(full) || !Directory.Exists(full))
+        {
+            _pickerError = $"{path} is not a folder on this computer.";
+            return;
+        }
+        _pickerError = null;
+        _browsePath = Path.GetFullPath(full);
+        _pathInput = _browsePath;
+        _browseFolders = CodeWorkspace.ListFolders(_browsePath);
+    }
+
+    private void OnPathKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            Browse(_pathInput);
+        }
+    }
+
+    private void UseFolder(string path)
+    {
+        SetWorkspace(path);
+        _showPicker = _workspace is null;
+        _pickerError = _workspace is null ? $"{path} is not a folder on this computer." : null;
+    }
+
+    private RenderFragment FolderPicker => @<div class="border rounded p-2 bg-body-tertiary d-flex flex-column gap-2">
+        <div class="d-flex align-items-center gap-2">
+            <strong class="small flex-grow-1">Project folder on @Environment.MachineName</strong>
+            @if (_workspace is not null)
+            {
+                <button type="button" class="btn-close" style="font-size: 0.6rem" aria-label="Close" @onclick="() => _showPicker = false"></button>
+            }
+        </div>
+        @if (_recent.Count > 0)
+        {
+            <div class="d-flex flex-wrap gap-1">
+                @foreach (var path in _recent.Where(Directory.Exists))
+                {
+                    <button type="button" class="btn btn-sm btn-outline-secondary" title="@path" @onclick="() => UseFolder(path)">
+                        <i class="bi bi-clock-history me-1" aria-hidden="true"></i>@FolderName(path)
+                    </button>
+                }
+            </div>
+        }
+        <div class="input-group input-group-sm">
+            <button type="button" class="btn btn-outline-secondary" title="Up one folder" aria-label="Up one folder"
+                    disabled="@(Directory.GetParent(_browsePath) is null)" @onclick="() => Browse(Directory.GetParent(_browsePath)!.FullName)">
+                <i class="bi bi-arrow-up" aria-hidden="true"></i>
+            </button>
+            <input class="form-control font-monospace" @bind="_pathInput" @bind:event="oninput" @onkeydown="OnPathKey" aria-label="Folder path" />
+            <button type="button" class="btn btn-outline-secondary" @onclick="() => Browse(_pathInput)">Go</button>
+            <button type="button" class="btn btn-primary" @onclick="() => UseFolder(_browsePath)">Use this folder</button>
+        </div>
+        @if (_pickerError is not null)
+        {
+            <div class="small text-danger">@_pickerError</div>
+        }
+        <div class="list-group list-group-flush overflow-auto border rounded" style="max-height: 16rem">
+            @if (_browseFolders.Count == 0)
+            {
+                <div class="list-group-item small text-body-secondary">No sub-folders.</div>
+            }
+            @foreach (var folder in _browseFolders)
+            {
+                <button type="button" class="list-group-item list-group-item-action py-1 small d-flex align-items-center gap-2"
+                        @onclick="() => Browse(folder)" @ondblclick="() => UseFolder(folder)" title="Click to open, double-click to use">
+                    <i class="bi bi-folder" aria-hidden="true"></i>@Path.GetFileName(folder)
+                </button>
+            }
+        </div>
+    </div>;
+
+    // ---------------------------------------------------------------- slash commands
+    /// <summary>Built-ins plus the folder's (and the user's) command files; refreshed when the folder is set and on each command.</summary>
+    private IReadOnlyList<CodeCommand> _commands = CodeCommands.BuiltIns;
+    private int _menuIndex;
+    private bool _menuDismissed;
+
+    /// <summary>The suggestion list: shown while the composer holds "/" plus a partial name and nothing else.</summary>
+    private IReadOnlyList<CodeCommand>? MenuItems =>
+        !_menuDismissed && _workspace is not null && _input.StartsWith('/') && !_input.Any(char.IsWhiteSpace)
+            ? CodeCommands.Matching(_commands, _input[1..])
+            : null;
+
+    private void OnInputChanged()
+    {
+        _menuIndex = 0;
+        _menuDismissed = false;
+    }
+
+    private void OnComposerKey(KeyboardEventArgs e)
+    {
+        if (MenuItems is not { Count: > 0 } menu)
+        {
+            return;
+        }
+        if (e.Key == "ArrowDown")
+        {
+            _menuIndex = (_menuIndex + 1) % menu.Count;
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            _menuIndex = (_menuIndex - 1 + menu.Count) % menu.Count;
+        }
+    }
+
+    private void PickCommand(CodeCommand command)
+    {
+        _input = $"/{command.Name} ";
+        _menuIndex = 0;
+        _ = _inputElement.FocusAsync();
+    }
+
+    /// <summary>/help: the commands and skills in this folder, shown in the transcript only (not stored, not sent).</summary>
+    private void ShowHelp(string workspace)
+    {
+        var folder = new CodeWorkspace(workspace);
+        var sb = new StringBuilder("**Commands**\n\n");
+        foreach (var command in _commands)
+        {
+            sb.Append("- `/").Append(command.Name).Append("` ").Append(command.Description);
+            sb.Append(command.Source switch { CodeCommandSource.Project => " *(project)*", CodeCommandSource.Personal => " *(personal)*", _ => "" }).Append('\n');
+        }
+        sb.Append("\nAdd your own as Markdown files in `.butterknife/commands/` or `.claude/commands/` (in the project, or in your home folder for every project). The file's text is the prompt; `$ARGUMENTS` is replaced by whatever follows the command.\n\n");
+
+        var skills = CodeCommands.DiscoverSkills(folder);
+        sb.Append("**Skills**\n\n");
+        if (skills.Count == 0)
+        {
+            sb.Append("None in this project. A skill is a folder with a `SKILL.md` in `.butterknife/skills/` or `.claude/skills/`; the model sees its name and description and reads the file when a task matches.\n");
+        }
+        foreach (var skill in skills)
+        {
+            sb.Append("- **").Append(skill.Name).Append("** ").Append(skill.Description).Append(" (`").Append(skill.Path).Append("`)\n");
+        }
+        _items.Add(new CodeItem(ItemKind.Assistant).Append(sb.ToString()));
+        _codeBlocksDirty = true;
+        _ = ScrollAsync(force: true);
+    }
+
+    // ---------------------------------------------------------------- send and run
+    private async Task SendAsync()
+    {
+        if (!CanSend || Selected is not { } model || _workspace is not { } workspace)
+        {
+            return;
+        }
+
+        var prompt = _input.Trim();
+        string? display = null;
+        if (CodeCommands.TryParse(prompt, out var commandName, out var arguments))
+        {
+            // Re-read the folder so a command file edited since the session started is used as it is now.
+            _commands = CodeCommands.Discover(new CodeWorkspace(workspace));
+            var command = _commands.FirstOrDefault(c => string.Equals(c.Name, commandName, StringComparison.OrdinalIgnoreCase));
+            if (command is null)
+            {
+                _error = $"There is no /{commandName} command here. Type / to see the commands.";
+                return;
+            }
+            _input = "";
+            _error = null;
+            switch (command.Name)
+            {
+                case CodeCommands.Clear:
+                    if (_sessionId is not null)
+                    {
+                        Nav.NavigateTo("code");
+                    }
+                    return;
+                case CodeCommands.Help:
+                    ShowHelp(workspace);
+                    return;
+                case CodeCommands.Compact:
+                    if (CanCompact)
+                    {
+                        await CompactNowAsync();
+                    }
+                    else
+                    {
+                        _error = "Nothing to compact yet: the conversation is still short.";
+                    }
+                    return;
+                case CodeCommands.Init:
+                    display = prompt;
+                    prompt = CodeCommands.Expand(CodeCommands.InitPrompt, arguments);
+                    break;
+                default:
+                    display = prompt;
+                    prompt = CodeCommands.Expand(command.Template ?? "", arguments);
+                    break;
+            }
+        }
+
+        _input = "";
+        _error = null;
+        _showPicker = false;
+
+        try
+        {
+            if (_sessionId is null)
+            {
+                var session = await Store.CreateAsync(_userId, MakeTitle(display ?? prompt), workspace, model.ConnectionId, model.Model, _mode, _disposed.Token);
+                _sessionId = session.Id;
+                _title = session.Title;
+                _titlePending = true;
+                Events.NotifyChanged();
+                Nav.NavigateTo($"code/{session.Id}", replace: true);
+            }
+
+            var message = new ChatMessage(ChatRole.User, prompt);
+            var id = await Store.AppendAsync(_sessionId.Value, message, display: display, cancellationToken: _disposed.Token);
+            _history.Add(message with { Id = id });
+            _items.Add(new CodeItem(ItemKind.User) { MessageIndex = _history.Count - 1, Expansion = display is null ? null : prompt }.Append(display ?? prompt));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _error = $"Could not save the message: {ex.Message}";
+            return;
+        }
+
+        await RunTurnAsync(model, workspace, prompt);
+    }
+
+    private async Task RunTurnAsync(ModelDescriptor model, string workspace, string prompt)
+    {
+        _isRunning = true;
+        _run = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
+        var token = _run.Token;
+        await ScrollAsync(force: true);
+
+        CodeTurnEnd? end = null; // null: stopped or failed
+        try
+        {
+            var client = await Registry.GetAsync(model.ConnectionId, token);
+            _history = CodeAgent.Repair(_history);
+            _agent = new CodeAgent(client, model.Model, new CodeWorkspace(workspace))
+            {
+                Mode = _mode,
+                Summary = _summary,
+                SummaryThrough = _summaryThrough,
+                ContextWindow = _contextWindow,
+                AutoCompactThreshold = LlmOptions.Value.AutoCompactThreshold,
+                KeepRecentPrompts = KeepRecentPrompts,
+                // The stored count described the request before this prompt.
+                LastUsage = _contextTokens is { } tokens ? (tokens, _history.Count - 1) : null,
+            };
+            _agent.AllowedCommands.UnionWith(_allowedCommands);
+            end = await _agent.RunAsync(_history, this, token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            await SaveInterruptedAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex is KeyNotFoundException ? "That model's connection no longer exists; pick another model." : ex.Message;
+            if (_current is { IsStreaming: true } current)
+            {
+                current.IsStreaming = false;
+                if (current.Text.Length == 0 && current.Reasoning.Length == 0)
+                {
+                    _items.Remove(current);
+                }
+            }
+            await SaveInterruptedAsync();
+        }
+        finally
+        {
+            if (_agent is not null)
+            {
+                _allowedCommands.UnionWith(_agent.AllowedCommands);
+                if (_agent.Mode != _mode)
+                {
+                    // "Always allow" on an edit switched the session to accepting edits.
+                    _mode = _agent.Mode;
+                    await SaveQuietlyAsync(() => Store.SetModeAsync(_sessionId!.Value, _mode, CancellationToken.None));
+                }
+            }
+            _agent = null;
+            _current = null;
+            _compacting = false;
+            _isRunning = false;
+            _run.Dispose();
+            _run = null;
+            _codeBlocksDirty = true;
+            if (_sessionId is { } id)
+            {
+                await SaveQuietlyAsync(() => Store.SetContextAsync(id, _contextTokens, _contextWindow, CancellationToken.None));
+                Events.NotifyChanged(); // the sidebar orders sessions by activity
+            }
+        }
+
+        if (end == CodeTurnEnd.StepLimit)
+        {
+            _items.Add(new CodeItem(ItemKind.Assistant) { Note = $"Stopped after {CodeAgent.MaxSteps} steps. Say \"continue\" to let it carry on." });
+        }
+        await ScrollAsync(force: false);
+
+        if (_titlePending && end == CodeTurnEnd.Done && _sessionId is { } sessionId)
+        {
+            _titlePending = false;
+            var reply = _history.LastOrDefault(m => m.Role == ChatRole.Assistant)?.Content ?? "";
+            _ = SuggestTitleAsync(sessionId, model, prompt, reply);
+        }
+    }
+
+    /// <summary>
+    /// Stop (or an error) mid-turn: the partial reply is kept, and every tool call left without a result gets one, so
+    /// the next request is valid for servers that insist on an answer per call.
+    /// </summary>
+    private async Task SaveInterruptedAsync()
+    {
+        if (_sessionId is not { } id)
+        {
+            return;
+        }
+
+        if (_current is { IsStreaming: true } current)
+        {
+            current.IsStreaming = false;
+            current.Note = "Stopped.";
+            current.EndedAt = Stopwatch.GetTimestamp();
+            if (current.Text.Length > 0)
+            {
+                var partial = new ChatMessage(ChatRole.Assistant, current.Text.ToString().Trim()) { Reasoning = current.Reasoning.Length > 0 ? current.Reasoning.ToString() : null, Model = current.ModelName };
+                _history.Add(partial);
+                await SaveQuietlyAsync(() => Store.AppendAsync(id, partial, cancellationToken: CancellationToken.None));
+            }
+            else if (current.Reasoning.Length == 0)
+            {
+                _items.Remove(current);
+            }
+        }
+
+        var repaired = CodeAgent.Repair(_history);
+        foreach (var message in repaired.Where(m => !_history.Any(h => ReferenceEquals(h, m))))
+        {
+            await SaveQuietlyAsync(() => Store.AppendAsync(id, message, cancellationToken: CancellationToken.None));
+            if (_items.LastOrDefault(i => i.CallId == message.ToolCallId) is { } item)
+            {
+                item.State = ToolState.Failed;
+                item.Pending = null;
+                item.SetOutput(message.Content);
+            }
+        }
+        _history = repaired;
+    }
+
+    private async Task SaveQuietlyAsync(Func<Task> save)
+    {
+        try
+        {
+            await save();
+        }
+        catch (Exception ex)
+        {
+            _error ??= $"Could not save: {ex.Message}";
+        }
+    }
+
+    private async Task SuggestTitleAsync(Guid sessionId, ModelDescriptor model, string prompt, string reply)
+    {
+        var title = await Titler.SuggestAsync(model.ConnectionId, model.Model, prompt, reply, _disposed.Token);
+        if (title is null || _sessionId != sessionId)
+        {
+            return;
+        }
+        // Only replace the placeholder: a rename made meanwhile wins.
+        var current = (await Store.ListAsync(_userId, _disposed.Token)).FirstOrDefault(s => s.Id == sessionId);
+        if (current is null || current.Title != _title)
+        {
+            return;
+        }
+        await Store.SetTitleAsync(sessionId, title, _disposed.Token);
+        _title = title;
+        Events.NotifyChanged();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // ---------------------------------------------------------------- the agent's callbacks (ICodeAgentObserver)
+    public void OnStepStarted()
+    {
+        _current = new CodeItem(ItemKind.Assistant) { IsStreaming = true, ModelName = Selected?.Model, StartedAt = Stopwatch.GetTimestamp() };
+        _items.Add(_current);
+        RequestRender(force: true);
+    }
+
+    public void OnDelta(ChatDelta delta)
+    {
+        if (_current is not { } item)
+        {
+            return;
+        }
+        if (delta.Text is { Length: > 0 } || delta.Reasoning is { Length: > 0 })
+        {
+            item.FirstTokenAt ??= Stopwatch.GetTimestamp();
+            item.Chunks++;
+        }
+        if (delta.Text is { Length: > 0 } text)
+        {
+            item.Append(text);
+        }
+        if (delta.Reasoning is { Length: > 0 } reasoning)
+        {
+            item.Reasoning.Append(reasoning);
+        }
+        if (delta.Usage is { } usage)
+        {
+            item.Usage = usage;
+            if (usage.PromptTokens is not null || usage.CompletionTokens is not null)
+            {
+                _contextTokens = (usage.PromptTokens ?? 0) + (usage.CompletionTokens ?? 0);
+            }
+        }
+        RequestRender();
+    }
+
+    public async Task OnAssistantMessageAsync(ChatMessage message, GenerationStats stats)
+    {
+        if (_current is { } item)
+        {
+            item.IsStreaming = false;
+            item.EndedAt = Stopwatch.GetTimestamp();
+            // A step that only called tools shows as its tool rows; an empty bubble would be noise.
+            if (item.Text.Length == 0 && item.Reasoning.Length == 0)
+            {
+                _items.Remove(item);
+            }
+        }
+        _current = null;
+
+        foreach (var call in message.ToolCalls)
+        {
+            var (title, icon, command) = CodeTools.Label(call);
+            _items.Add(new CodeItem(ItemKind.Tool) { CallId = call.Id, Title = title, Icon = icon, Command = command, State = ToolState.Queued });
+        }
+
+        if (_sessionId is { } id)
+        {
+            await SaveQuietlyAsync(() => Store.AppendAsync(id, message with { Stats = stats }, cancellationToken: CancellationToken.None));
+        }
+        RequestRender(force: true);
+    }
+
+    public async Task<PermissionDecision> RequestPermissionAsync(ToolInvocation invocation, CancellationToken cancellationToken)
+    {
+        var item = ToolItem(invocation);
+        item.State = ToolState.Waiting;
+        item.Pending = new TaskCompletionSource<PermissionDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+        item.Feedback = "";
+        RequestRender(force: true);
+        try
+        {
+            var decision = await item.Pending.Task.WaitAsync(cancellationToken);
+            item.Denied = decision.Choice == PermissionChoice.Deny;
+            return decision;
+        }
+        finally
+        {
+            item.Pending = null;
+        }
+    }
+
+    private void Answer(CodeItem item, PermissionChoice choice) =>
+        item.Pending?.TrySetResult(new PermissionDecision(choice, choice == PermissionChoice.Deny ? item.Feedback : null));
+
+    public void OnToolStarted(ToolInvocation invocation)
+    {
+        var item = ToolItem(invocation);
+        item.State = ToolState.Running;
+        _mode = _agent?.Mode ?? _mode; // "Allow all edits" has just switched the agent to accepting edits
+        RequestRender(force: true);
+    }
+
+    public void OnToolOutput(ToolInvocation invocation, string chunk)
+    {
+        if (_items.LastOrDefault(i => i.CallId == invocation.Call.Id) is { } item)
+        {
+            item.AppendOutput(chunk, MaxLiveOutputChars);
+            _ = InvokeAsync(() => RequestRender());
+        }
+    }
+
+    public async Task OnToolFinishedAsync(ToolInvocation invocation, ToolResult result, ChatMessage resultMessage)
+    {
+        var item = ToolItem(invocation);
+        item.State = item.Denied ? ToolState.Denied : result.IsError ? ToolState.Failed : ToolState.Done;
+        item.SetOutput(result.Output);
+        if (result.Diff is not null && item.Diff is null)
+        {
+            item.Diff = LineDiffResult.FromUnified(result.Diff);
+        }
+        if (_sessionId is { } id)
+        {
+            await SaveQuietlyAsync(() => Store.AppendAsync(id, resultMessage, result.Diff, cancellationToken: CancellationToken.None));
+        }
+        RequestRender(force: true);
+    }
+
+    public void OnCompacting()
+    {
+        _compacting = true;
+        RequestRender(force: true);
+    }
+
+    public async Task OnCompactedAsync(CodeCompaction compaction)
+    {
+        _compacting = false;
+        await ApplyCompactionAsync(compaction);
+        RequestRender(force: true);
+    }
+
+    public void OnCompactionFailed(string error)
+    {
+        _compacting = false;
+        _error = $"Could not compact the session: {error}";
+        RequestRender(force: true);
+    }
+
+    /// <summary>The Compact button: summarise everything before the last few prompts now. Stop (or Esc) cancels.</summary>
+    private async Task CompactNowAsync()
+    {
+        if (!CanCompact || Selected is not { } model)
+        {
+            return;
+        }
+
+        var sessionId = _sessionId;
+        _isRunning = true;
+        _compacting = true;
+        _error = null;
+        _run = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
+        var token = _run.Token;
+        await ScrollAsync(force: true);
+        try
+        {
+            var client = await Registry.GetAsync(model.ConnectionId, token);
+            if (await CodeCompactor.CompactAsync(client, model.Model, _history, _summary, _summaryThrough, KeepRecentPrompts, _contextWindow, token) is { } compaction)
+            {
+                await ApplyCompactionAsync(compaction);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            if (!_disposed.IsCancellationRequested && _sessionId == sessionId)
+            {
+                _error = "Compaction cancelled.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex is KeyNotFoundException ? "That model's connection no longer exists; pick another model." : $"Could not compact the session: {ex.Message}";
+        }
+        finally
+        {
+            _compacting = false;
+            _isRunning = false;
+            _run.Dispose();
+            _run = null;
+        }
+        await ScrollAsync(force: false);
+    }
+
+    /// <summary>Takes a new checkpoint into use and stores it; the exact token count described the uncompacted history.</summary>
+    private async Task ApplyCompactionAsync(CodeCompaction compaction)
+    {
+        _summary = compaction.Summary;
+        _summaryThrough = compaction.Through;
+        _showSummary = false;
+        _contextTokens = null;
+        if (_sessionId is { } id)
+        {
+            await SaveQuietlyAsync(() => Store.SetSummaryAsync(id, compaction.Summary, compaction.Through, CancellationToken.None));
+            await SaveQuietlyAsync(() => Store.SetContextAsync(id, null, _contextWindow, CancellationToken.None));
+        }
+    }
+
+    /// <summary>
+    /// The row for a call, filled in from the prepared invocation (its title and diff are more exact than the label).
+    /// The latest row with that id: some servers number calls per request, so ids repeat across turns.
+    /// </summary>
+    private CodeItem ToolItem(ToolInvocation invocation)
+    {
+        var item = _items.LastOrDefault(i => i.CallId == invocation.Call.Id);
+        if (item is null)
+        {
+            item = new CodeItem(ItemKind.Tool) { CallId = invocation.Call.Id };
+            _items.Add(item);
+        }
+        item.Title = invocation.Title;
+        item.Icon = invocation.Icon;
+        item.Command = invocation.Command ?? item.Command;
+        item.Diff = invocation.Diff ?? item.Diff;
+        return item;
+    }
+
+    /// <summary>Re-renders at most every 50 ms while streaming (forced for structural changes), following the bottom if pinned.</summary>
+    private void RequestRender(bool force = false)
+    {
+        var now = Stopwatch.GetTimestamp();
+        if (!force && Stopwatch.GetElapsedTime(_lastRender, now) < RenderInterval)
+        {
+            return;
+        }
+        _lastRender = now;
+        _ = ScrollAsync(force: false);
+    }
+
+    private async Task ScrollAsync(bool force)
+    {
+        await InvokeAsync(StateHasChanged);
+        if (_js is null)
+        {
+            return;
+        }
+        try
+        {
+            await _js.InvokeVoidAsync("scrollToBottom", _messagesElement, force, _isRunning);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (TaskCanceledException)
+        {
+        }
+    }
+
+    // ---------------------------------------------------------------- loading a stored transcript
+    private void AddLoaded(CodeEntry entry, int index)
+    {
+        var message = entry.Message;
+        switch (message.Role)
+        {
+            case ChatRole.User:
+                _items.Add(new CodeItem(ItemKind.User) { MessageIndex = index, Expansion = entry.Display is null ? null : message.Content }.Append(entry.Display ?? message.Content));
+                break;
+            case ChatRole.Assistant:
+                if (message.Content.Length > 0 || message.Reasoning is { Length: > 0 })
+                {
+                    var item = new CodeItem(ItemKind.Assistant) { ModelName = message.Model, StoredStats = message.Stats }.Append(message.Content);
+                    item.Reasoning.Append(message.Reasoning);
+                    _items.Add(item);
+                }
+                foreach (var call in message.ToolCalls)
+                {
+                    var (title, icon, command) = CodeTools.Label(call);
+                    _items.Add(new CodeItem(ItemKind.Tool) { CallId = call.Id, Title = title, Icon = icon, Command = command, State = ToolState.Queued });
+                }
+                break;
+            case ChatRole.Tool:
+                if (_items.LastOrDefault(i => i.CallId == message.ToolCallId) is { } tool)
+                {
+                    tool.State = message.IsError ? (message.Content.StartsWith("The user declined", StringComparison.Ordinal) ? ToolState.Denied : ToolState.Failed) : ToolState.Done;
+                    tool.SetOutput(message.Content);
+                    if (entry.Diff is not null)
+                    {
+                        tool.Diff = LineDiffResult.FromUnified(entry.Diff);
+                        if (message.ToolName == CodeTools.WriteFile && tool.Diff.Lines.All(l => l.Kind == DiffKind.Added))
+                        {
+                            tool.Title = "Create" + tool.Title["Write".Length..]; // a new file: everything added
+                            tool.Icon = "file-earmark-plus";
+                        }
+                    }
+                }
+                break;
+        }
+    }
+
+    // ---------------------------------------------------------------- tool rows
+    private RenderFragment ToolRow(CodeItem item) => @<div class="code-tool mb-2 @(item.State == ToolState.Waiting ? "code-tool-waiting" : "")">
+        @if (item.State == ToolState.Waiting)
+        {
+            <div class="border border-warning rounded p-2 bg-warning-subtle d-flex flex-column gap-2" role="alertdialog" aria-label="@item.Title">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="bi bi-@item.Icon" aria-hidden="true"></i>
+                    <span class="fw-semibold text-break">@(item.Command is not null ? "Run this command?" : $"{item.Title}?")</span>
+                </div>
+                @if (item.Command is { } command)
+                {
+                    <pre class="code-output mb-0 p-2 rounded small">@command</pre>
+                }
+                else if (item.Diff is { } diff)
+                {
+                    @DiffView(diff)
+                }
+                <input class="form-control form-control-sm" placeholder="Or tell the model what to do instead (sent with Deny)" @bind="item.Feedback" @bind:event="oninput" aria-label="Instead" />
+                <div class="d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-sm btn-primary" @onclick="() => Answer(item, PermissionChoice.Allow)">
+                        <i class="bi bi-check-lg me-1" aria-hidden="true"></i>Allow
+                    </button>
+                    <button type="button" class="btn btn-sm btn-secondary" @onclick="() => Answer(item, PermissionChoice.AllowAlways)">
+                        @(item.Command is { } c ? $"Always allow {CodeTools.CommandPrefix(c)}" : "Allow all edits this session")
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger ms-auto" @onclick="() => Answer(item, PermissionChoice.Deny)">
+                        <i class="bi bi-x-lg me-1" aria-hidden="true"></i>Deny
+                    </button>
+                </div>
+            </div>
+        }
+        else
+        {
+            <details class="small" open="@(item.Diff is { IsEmpty: false } && item.State == ToolState.Done)">
+                <summary class="d-flex align-items-center gap-2 text-body-secondary">
+                    <i class="bi bi-@item.Icon" aria-hidden="true"></i>
+                    <span class="text-truncate font-monospace">@item.Title</span>
+                    @if (item.Diff is { IsEmpty: false } d && item.State == ToolState.Done)
+                    {
+                        <span class="text-success">+@d.Added</span><span class="text-danger">−@d.Removed</span>
+                    }
+                    @switch (item.State)
+                    {
+                        case ToolState.Running:
+                            <span class="spinner-border spinner-border-sm" aria-label="Running"></span>
+                            break;
+                        case ToolState.Queued:
+                            <span class="text-body-tertiary">…</span>
+                            break;
+                        case ToolState.Failed:
+                            <i class="bi bi-x-circle text-danger" title="Failed" aria-label="Failed"></i>
+                            break;
+                        case ToolState.Denied:
+                            <span class="badge text-bg-secondary">declined</span>
+                            break;
+                        default:
+                            <i class="bi bi-check2 text-success" aria-label="Done"></i>
+                            break;
+                    }
+                </summary>
+                <div class="mt-1 ms-4">
+                    @if (item.Command is { } cmd)
+                    {
+                        <div class="font-monospace text-body-secondary text-break mb-1">$ @cmd</div>
+                    }
+                    @if (item.Diff is { IsEmpty: false } diff && item.State == ToolState.Done)
+                    {
+                        @DiffView(diff)
+                    }
+                    else if (item.Output is { Length: > 0 } output)
+                    {
+                        <pre class="code-output mb-0 p-2 rounded">@output</pre>
+                    }
+                </div>
+            </details>
+        }
+    </div>;
+
+    private static RenderFragment DiffView(LineDiffResult diff) => @<div class="code-diff font-monospace rounded border">
+        @foreach (var line in diff.Lines)
+        {
+            @if (line.Kind == DiffKind.Gap)
+            {
+                <div class="diff-gap text-body-tertiary">⋯</div>
+            }
+            else
+            {
+                <div class="diff-line diff-@line.Kind.ToString().ToLowerInvariant()"><span class="diff-sign">@(line.Kind switch { DiffKind.Added => "+", DiffKind.Removed => "−", _ => " " })</span>@line.Text</div>
+            }
+        }
+    </div>;
+
+    public async ValueTask DisposeAsync()
+    {
+        ConnectionEvents.Changed -= OnConnectionsChanged;
+        await _disposed.CancelAsync();
+        if (_js is not null)
+        {
+            try
+            {
+                await _js.InvokeVoidAsync("unwireShortcuts");
+                await _js.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+        _self?.Dispose();
+        _disposed.Dispose();
+    }
+
+    // ---------------------------------------------------------------- transcript entries
+    private enum ItemKind
+    {
+        User,
+        Assistant,
+        Tool,
+    }
+
+    private enum ToolState
+    {
+        Queued,
+        Waiting,
+        Running,
+        Done,
+        Failed,
+        Denied,
+    }
+
+    /// <summary>One transcript entry: a prompt, a reply (streaming or stored), or a tool call with its result.</summary>
+    private sealed class CodeItem(ItemKind kind)
+    {
+        private MarkupString? _html;
+        private readonly object _outputLock = new();
+        private StringBuilder? _liveOutput;
+        private string? _output;
+
+        public ItemKind Kind { get; } = kind;
+
+        /// <summary>For a prompt: its position in the history, which the compaction checkpoint counts in.</summary>
+        public int MessageIndex { get; init; } = -1;
+
+        /// <summary>For a prompt sent as a slash command (Text is what was typed): the prompt the model was sent.</summary>
+        public string? Expansion { get; init; }
+        public StringBuilder Text { get; } = new();
+        public StringBuilder Reasoning { get; } = new();
+        public bool IsStreaming { get; set; }
+        public string? ModelName { get; init; }
+        public string? Note { get; set; }
+
+        public long StartedAt { get; init; }
+        public long? FirstTokenAt { get; set; }
+        public long? EndedAt { get; set; }
+        public int Chunks { get; set; }
+        public TokenUsage? Usage { get; set; }
+        public GenerationStats? StoredStats { get; init; }
+
+        public string? CallId { get; init; }
+        public string Title { get; set; } = "";
+        public string Icon { get; set; } = "tools";
+        public string? Command { get; set; }
+        public LineDiffResult? Diff { get; set; }
+        public ToolState State { get; set; }
+        public bool Denied { get; set; }
+        public string Feedback { get; set; } = "";
+        public TaskCompletionSource<PermissionDecision>? Pending { get; set; }
+
+        public CodeItem Append(string text)
+        {
+            Text.Append(text);
+            _html = null;
+            return this;
+        }
+
+        public MarkupString Html(MarkdownRenderer markdown) => _html ??= new MarkupString(markdown.ToHtml(Text.ToString()));
+
+        public GenerationStats GetStats()
+        {
+            var end = EndedAt ?? Stopwatch.GetTimestamp();
+            return new GenerationStats(
+                StartedAt == 0 ? TimeSpan.Zero : Stopwatch.GetElapsedTime(StartedAt, end),
+                FirstTokenAt is { } first ? Stopwatch.GetElapsedTime(StartedAt, first) : null,
+                Chunks,
+                Usage);
+        }
+
+        /// <summary>The result text, or the live output while a command runs (only its tail is kept).</summary>
+        public string? Output
+        {
+            get
+            {
+                lock (_outputLock)
+                {
+                    return _output ?? _liveOutput?.ToString();
+                }
+            }
+        }
+
+        public void AppendOutput(string chunk, int max)
+        {
+            lock (_outputLock)
+            {
+                _liveOutput ??= new StringBuilder();
+                _liveOutput.Append(chunk);
+                if (_liveOutput.Length > max)
+                {
+                    _liveOutput.Remove(0, _liveOutput.Length - max);
+                }
+            }
+        }
+
+        public void SetOutput(string output)
+        {
+            lock (_outputLock)
+            {
+                _output = output;
+                _liveOutput = null;
+            }
+        }
+    }
+}

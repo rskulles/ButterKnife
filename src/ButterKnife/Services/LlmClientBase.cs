@@ -38,6 +38,9 @@ public abstract class LlmClientBase(IHttpClientFactory httpClientFactory, LlmCon
 
     public abstract Task<bool?> SupportsImagesAsync(string model, CancellationToken cancellationToken = default);
 
+    /// <summary>Unknown unless the backend has a way to say (Ollama's capabilities, LM Studio's model info).</summary>
+    public virtual Task<bool?> SupportsToolsAsync(string model, CancellationToken cancellationToken = default) => Task.FromResult<bool?>(null);
+
     /// <summary>GET that returns null instead of throwing, for optional capability lookups.</summary>
     protected async Task<T?> TryGetJsonAsync<T>(string relativeUrl, CancellationToken cancellationToken) where T : class
     {

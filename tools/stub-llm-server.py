@@ -10,6 +10,11 @@ Speaks enough of each protocol for the app to list models, stream a canned markd
   Anthropic         GET /v1/models (when x-api-key is present), POST /v1/messages (SSE)
   whisper.cpp       POST /inference (returns canned text); /v1/audio/transcriptions answers 404 like whisper.cpp
 
+When a chat request offers tools (the Code tab), the reply walks through a fixed scenario instead, one tool call per
+request in each protocol's own streaming shape: list_files, read_file README.md, write_file stub-notes.md, edit_file
+on it, run_command "ls -la", then a closing summary. A prompt containing "[quick]" skips straight to the summary.
+fake-llama:8b and fake-gpt report tool support; fake-tiny:1b does not.
+
 Run it, then add connections in the app pointing at http://127.0.0.1:<port> (Ollama / whisper.cpp)
 or http://127.0.0.1:<port>/v1 (OpenAI-compatible / Anthropic). Each request is logged with the roles
 and image counts it carried, which is how the wire format is checked during manual testing.
@@ -64,6 +69,34 @@ DELAY = 0.08
 WORDS = re.findall(r"\S+\s*|\s+", REPLY)
 CONTINUATION = re.findall(r"\S+\s*|\s+", "and here is the rest of the reply, continued from where it stopped.")
 TITLE = re.findall(r"\S+\s*|\s+", "\"Stub Title From The Model.\"")
+CODE_SUMMARY = re.findall(r"\S+\s*|\s+", "- The user asked the stub agent to look around the project.\n- It listed the folder, read `README.md`, wrote and edited `stub-notes.md` and ran `ls -la` (which passed).\n")
+TOOL_STEPS = [
+    ("I'll start by looking at what is in the project folder.", "list_files", {}),
+    ("Let me read the README.", "read_file", {"path": "README.md"}),
+    ("Now I'll write a notes file.", "write_file", {"path": "stub-notes.md", "content": "# Notes from the stub model\n\nWritten by the stub.\n\nStatus: draft\n"}),
+    ("And mark it reviewed.", "edit_file", {"path": "stub-notes.md", "old_string": "Status: draft", "new_string": "Status: reviewed"}),
+    ("Finally, let me check the folder from the shell.", "run_command", {"command": "ls -la"}),
+]
+TOOL_SUMMARY = "Done. I listed the folder, read `README.md`, wrote and edited `stub-notes.md`, and ran `ls -la`.\n\n- one\n- two\n"
+
+def tool_progress(body):
+    """The latest real prompt and the tool names already called after it, in any of the three protocols."""
+    msgs = body.get("messages", [])
+    def is_prompt(m):
+        c = m.get("content")
+        return m.get("role") == "user" and (isinstance(c, str) or not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in (c or [])))
+    start = max((i for i, m in enumerate(msgs) if is_prompt(m)), default=-1)
+    prompt = msgs[start].get("content") if start >= 0 else ""
+    if isinstance(prompt, list):
+        prompt = " ".join(b.get("text", "") for b in prompt if isinstance(b, dict))
+    called = []
+    for m in msgs[start + 1:]:
+        for c in m.get("tool_calls") or []:
+            called.append((c.get("function") or {}).get("name"))
+        if isinstance(m.get("content"), list):
+            called += [b.get("name") for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_use"]
+    return prompt or "", called
+
 THINKING = re.findall(r"\S+\s*|\s+", "The user wants a markdown check. I should show a heading, some inline styles, a code block, a list, a table and a quote. ")
 
 class H(BaseHTTPRequestHandler):
@@ -78,7 +111,7 @@ class H(BaseHTTPRequestHandler):
             self._json({"models": [{"name": "fake-llama:8b", "model": "fake-llama:8b", "context_length": 8192}]})
         elif self.path.startswith("/api/v0/models/"):
             mid = self.path.rsplit("/", 1)[-1]
-            self._json({"id": mid, "type": "vlm" if mid == "fake-gpt-vision" else "llm", "max_context_length": 4096})
+            self._json({"id": mid, "type": "vlm" if mid == "fake-gpt-vision" else "llm", "max_context_length": 4096, "capabilities": ["tool_use"] if mid == "fake-gpt" else []})
         elif self.path == "/api/tags":
             self._json({"models": [{"name": "fake-llama:8b"}, {"name": "fake-tiny:1b"}]})
         elif self.path.startswith("/v1/models"):
@@ -128,8 +161,10 @@ class H(BaseHTTPRequestHandler):
             print("  system:", repr(system[-160:]), flush=True)
         print("POST", self.path, body.get("model"), [(m.get("role"), imgs(m)) for m in body.get("messages", [])], tuning or "", flush=True)
         if self.path == "/api/show":
-            caps = ["completion", "vision"] if body.get("model") == "fake-llama:8b" else ["completion"]
+            caps = ["completion", "vision", "tools"] if body.get("model") == "fake-llama:8b" else ["completion"]
             self._json({"capabilities": caps, "model_info": {"general.architecture": "llama", "llama.context_length": 131072}}); return
+        if body.get("tools"):
+            self.tool_reply(body); return
         # Test hooks for the chat page's Continue: a user message containing "[cut]" gets a reply cut off after a few
         # words with a "length" finish; a request whose last message is the assistant's (a continuation) gets the rest.
         msgs = body.get("messages", [])
@@ -139,13 +174,17 @@ class H(BaseHTTPRequestHandler):
         # The chat page asks for a title after the first exchange (ChatTitler.Instruction); answer with a plain title
         # and no thinking so the sidebar can be checked.
         titling = (not continuing) and str(last.get("content", "")).startswith("Write a title")
+        # The Code tab compacts a long session by asking for a summary (CodeCompactor.SummarizerSystemPrompt).
+        summarising = isinstance(system, str) and system.startswith("You summarise sessions between a user and a coding agent")
+        if summarising:
+            print("  code summary request, %d chars of transcript" % len(str(last.get("content", ""))), flush=True)
         # Replies start with the model's name so two models answering side by side can be told apart.
-        words = CONTINUATION if continuing else TITLE if titling else ([f"_{body.get('model')}_ ", "says:\n\n"] + (WORDS[:6] if cut else WORDS))
+        words = CONTINUATION if continuing else TITLE if titling else CODE_SUMMARY if summarising else ([f"_{body.get('model')}_ ", "says:\n\n"] + (WORDS[:6] if cut else WORDS))
         finish = "length" if cut else "stop"
         if self.path == "/api/chat":
             self.send_response(200); self.send_header("Content-Type", "application/x-ndjson"); self.end_headers()
             # Thinking models (Ollama 0.9+) stream their reasoning in message.thinking before the answer.
-            if not continuing and not titling:
+            if not continuing and not titling and not summarising:
                 for w in THINKING:
                     self.wfile.write((json.dumps({"model": body["model"], "message": {"role": "assistant", "content": "", "thinking": w}, "done": False}) + "\n").encode()); self.wfile.flush(); time.sleep(DELAY)
             for w in words:
@@ -156,7 +195,7 @@ class H(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
             # fake-gpt thinks inline with <think> tags (as Qwen3 does through llama.cpp/LM Studio); other models use the
             # separated reasoning_content field (DeepSeek, vLLM).
-            if continuing or titling:
+            if continuing or titling or summarising:
                 pass
             elif body.get("model") == "fake-gpt":
                 for w in ["<think>"] + THINKING + ["</think>"]:
@@ -181,6 +220,61 @@ class H(BaseHTTPRequestHandler):
                 ev("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": w}}); time.sleep(DELAY)
             ev("content_block_stop", {"type": "content_block_stop", "index": 0})
             ev("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 5}})
+            ev("message_stop", {"type": "message_stop"})
+        else:
+            self.send_response(404); self.end_headers()
+
+    def tool_reply(self, body):
+        prompt, called = tool_progress(body)
+        step = None if "[quick]" in prompt else next((t for t in TOOL_STEPS if t[1] not in called), None)
+        text, call = (step[0], (step[1], step[2])) if step else (TOOL_SUMMARY, None)
+        words = [f"_{body.get('model')}_ "] + re.findall(r"\S+\s*|\s+", text) if not called else re.findall(r"\S+\s*|\s+", text)
+        print("  tools offered: %s; called so far: %s -> %s" % ([t.get("name") or (t.get("function") or {}).get("name") for t in body["tools"]], called, call[0] if call else "summary"), flush=True)
+        model = body.get("model")
+        # Prompt size grows with what is sent (about four characters a token), so a long session fills fake-llama:8b's
+        # 8k window and the Code tab compacts.
+        prompt_tokens = max(1, len(json.dumps(body)) // 4)
+        print("  prompt ~%d tokens" % prompt_tokens, flush=True)
+        if self.path == "/api/chat":
+            self.send_response(200); self.send_header("Content-Type", "application/x-ndjson"); self.end_headers()
+            def put(obj):
+                self.wfile.write((json.dumps(obj) + "\n").encode()); self.wfile.flush()
+            for w in words:
+                put({"model": model, "message": {"role": "assistant", "content": w}, "done": False}); time.sleep(DELAY)
+            if call:
+                put({"model": model, "message": {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": call[0], "arguments": call[1]}}]}, "done": False})
+            put({"model": model, "message": {"role": "assistant", "content": ""}, "done": True, "done_reason": "stop", "prompt_eval_count": prompt_tokens, "eval_count": len(words) + 10})
+        elif self.path == "/v1/chat/completions":
+            self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+            def put(obj):
+                self.wfile.write(("data: " + json.dumps(obj) + "\n\n").encode()); self.wfile.flush()
+            for w in words:
+                put({"choices": [{"delta": {"content": w}, "index": 0}]}); time.sleep(DELAY)
+            if call:
+                # Arguments arrive in fragments, the way vLLM and llama.cpp stream them.
+                args = json.dumps(call[1]); third = max(1, len(args) // 3)
+                put({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_stub%d" % len(called), "type": "function", "function": {"name": call[0], "arguments": ""}}]}, "index": 0}]})
+                for i in range(0, len(args), third):
+                    put({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": args[i:i + third]}}]}, "index": 0}]}); time.sleep(DELAY)
+            put({"choices": [{"delta": {}, "index": 0, "finish_reason": "tool_calls" if call else "stop"}]})
+            put({"choices": [], "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": len(words) + 10}})
+            self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush()
+        elif self.path == "/v1/messages":
+            self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
+            def ev(name, obj):
+                self.wfile.write(("event: %s\ndata: %s\n\n" % (name, json.dumps(obj))).encode()); self.wfile.flush()
+            ev("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": model, "content": [], "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": prompt_tokens, "output_tokens": 1}}})
+            ev("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+            for w in words:
+                ev("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": w}}); time.sleep(DELAY)
+            ev("content_block_stop", {"type": "content_block_stop", "index": 0})
+            if call:
+                args = json.dumps(call[1]); third = max(1, len(args) // 3)
+                ev("content_block_start", {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_stub%d" % len(called), "name": call[0], "input": {}}})
+                for i in range(0, len(args), third):
+                    ev("content_block_delta", {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": args[i:i + third]}})
+                ev("content_block_stop", {"type": "content_block_stop", "index": 1})
+            ev("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use" if call else "end_turn", "stop_sequence": None}, "usage": {"output_tokens": len(words) + 10}})
             ev("message_stop", {"type": "message_stop"})
         else:
             self.send_response(404); self.end_headers()

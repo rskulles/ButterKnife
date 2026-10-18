@@ -15,11 +15,13 @@ public static class DataServiceCollectionExtensions
         services.AddSingleton<IConnectionStore, SqliteConnectionStore>();
         services.AddSingleton<ISettingsStore, SqliteSettingsStore>();
         services.AddSingleton<IUserStore, SqliteUserStore>();
+        services.AddSingleton<ICodeSessionStore, SqliteCodeSessionStore>();
         services.AddSingleton<ConversationEvents>();
         services.AddSingleton<ConnectionEvents>();
         services.AddSingleton<SettingsEvents>();
         services.AddSingleton<PersonaEvents>();
         services.AddSingleton<UserEvents>();
+        services.AddSingleton<CodeSessionEvents>();
         return services;
     }
 }

@@ -65,6 +65,15 @@ Wi‑Fi needs an account you make for them under **Settings → Users**, and the
   chat. The picture lands in the conversation, and one click hands it to a vision model for questions. Attach a
   picture (or click "Redraw this picture" under one you made) and `/image make it night` starts from it; a strength
   slider in the model settings says how far the redraw may stray.
+- **A coding agent for your own models.** Switch the sidebar to **Code**, pick a project folder on the computer
+  running ButterKnife, and ask for a change. The model looks around the code, edits files and runs your build or
+  tests, showing every change as a diff and asking before it writes a file or runs a command (or, if you say so,
+  only before commands, or never). Plan mode keeps it to reading and proposing. It needs a model that can call tools,
+  such as Qwen, Llama 3.1+ or Mistral, and a generous context window; ButterKnife tells you if the model you picked
+  can't. Type `/` for commands: `/init` writes an
+  `AGENTS.md` describing your project for later sessions, plus `/clear`, `/compact` and `/help`, and your own commands
+  and skills as Markdown files in `.claude/` or `.butterknife/` (the same layout Claude Code uses, so existing ones
+  work). Code is for administrators at home only, since it works on that computer's files.
 - **Second chances.** Edit a message and resend it, regenerate a reply, continue one that got cut off, retry a
   request that failed, or branch a chat off from any point and take it somewhere else.
 - **Show your work.** Models that think out loud get a fold-out for their reasoning. Code comes highlighted with a

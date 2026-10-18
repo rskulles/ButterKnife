@@ -5,6 +5,8 @@
 @inject IJSRuntime JS
 @inject CurrentUser CurrentUser
 @inject UserEvents UserEvents
+@inject ICodeSessionStore CodeStore
+@inject CodeSessionEvents CodeEvents
 
 @* The sidebar follows the page colour mode. On phones everything below the brand bar is a collapse; inside it the
    conversation list (the signed-in user's own chats) scrolls and a footer (who is signed in, Settings link,
@@ -20,6 +22,34 @@
 
     <div class="collapse d-md-block flex-grow-1" id="sidebar-nav">
         <div class="d-flex flex-column h-100">
+            @if (_canCode)
+            {
+                @* Chat or Code: which list the sidebar shows follows the page that is open. Code is for administrators at home. *@
+                <div class="px-2 pt-2">
+                    <div class="btn-group btn-group-sm w-100" role="group" aria-label="Mode">
+                        <a href="" class="btn @(_codeMode ? "btn-outline-secondary" : "btn-secondary")" aria-current="@(!_codeMode ? "page" : null)">
+                            <i class="bi bi-chat-left-text me-1" aria-hidden="true"></i>Chat
+                        </a>
+                        <a href="code" class="btn @(_codeMode ? "btn-secondary" : "btn-outline-secondary")" aria-current="@(_codeMode ? "page" : null)">
+                            <i class="bi bi-terminal me-1" aria-hidden="true"></i>Code
+                        </a>
+                    </div>
+                </div>
+            }
+            @if (_codeMode)
+            {
+                <nav class="nav nav-pills flex-column flex-nowrap gap-1 p-2 flex-grow-1 overflow-auto">
+                    <NavLink class="nav-link text-nowrap" href="code" Match="NavLinkMatch.All" title="New session (Ctrl+Shift+O, ⌘⇧O on a Mac)">
+                        <i class="bi bi-plus-square-fill me-2" aria-hidden="true"></i>New session
+                    </NavLink>
+                    @foreach (var s in _codeSessions)
+                    {
+                        @CodeRow(s)
+                    }
+                </nav>
+            }
+            else
+            {
             @* Search: every word as a prefix, all required, over message text plus a substring match on titles.
                Typing replaces the list with grouped hits; a hit opens the chat at that message (?m=id). *@
             <div class="px-2 pt-2 position-relative">
@@ -91,6 +121,7 @@
                 }
                 }
             </nav>
+            }
 
             <div class="border-top flex-shrink-0">
                 @if (_user is not null)
@@ -244,6 +275,86 @@
             }
         </div>;
 
+    // ---------------------------------------------------------------- Code sessions
+    private bool _canCode;
+    private bool _codeMode;
+    private IReadOnlyList<CodeSessionSummary> _codeSessions = [];
+
+    private static bool IsCodePath(string relative) =>
+        relative.Equals("code", StringComparison.OrdinalIgnoreCase) || relative.StartsWith("code/", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A Code session row: title over the folder name, with the same rename / delete menu as chats.</summary>
+    private RenderFragment<CodeSessionSummary> CodeRow => s =>
+        @<div class="d-flex align-items-center">
+            @if (_pendingDelete == s.Id)
+            {
+                <span class="d-flex align-items-center gap-2 w-100 px-2 small" role="alertdialog" aria-label="Delete this session?">
+                    <span class="flex-grow-1">Delete?</span>
+                    <button type="button" class="btn btn-sm btn-danger" @onclick="() => DeleteCodeAsync(s.Id)">Delete</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelDelete">Keep</button>
+                </span>
+            }
+            else if (_renaming == s.Id)
+            {
+                <span class="d-flex align-items-center gap-2 w-100 px-2" role="group" aria-label="Rename session">
+                    <input class="form-control form-control-sm" @bind="_renameText" @bind:event="oninput"
+                           @onkeydown="e => OnRenameKeyAsync(e, s.Id)" aria-label="Session title" />
+                    <button type="button" class="btn btn-sm btn-primary" @onclick="() => RenameAsync(s.Id)" disabled="@string.IsNullOrWhiteSpace(_renameText)">Save</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelRename">Cancel</button>
+                </span>
+            }
+            else
+            {
+                <NavLink class="nav-link flex-grow-1 small overflow-hidden" href="@($"code/{s.Id}")" title="@($"{s.Title}\n{s.Workspace}")">
+                    <span class="d-block text-truncate"><i class="bi bi-terminal me-2" aria-hidden="true"></i>@s.Title</span>
+                    <span class="d-block text-truncate opacity-75 ps-4" style="font-size: 0.8em">@FolderName(s.Workspace)</span>
+                </NavLink>
+                <div class="dropdown">
+                    <button type="button" class="btn btn-sm btn-link text-body-secondary p-1" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}'
+                            aria-expanded="false" title="Session actions" aria-label="Actions for @s.Title">
+                        <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow small">
+                        <li><button type="button" class="dropdown-item" @onclick="() => BeginRename(s.Id, s.Title)"><i class="bi bi-pencil me-2" aria-hidden="true"></i>Rename</button></li>
+                        <li><hr class="dropdown-divider" /></li>
+                        <li><button type="button" class="dropdown-item text-danger" @onclick="() => _pendingDelete = s.Id"><i class="bi bi-trash me-2" aria-hidden="true"></i>Delete</button></li>
+                    </ul>
+                </div>
+            }
+        </div>;
+
+    private static string FolderName(string path) => Path.GetFileName(Path.TrimEndingDirectorySeparator(path)) is { Length: > 0 } name ? name : path;
+
+    private async Task LoadCodeAsync()
+    {
+        try
+        {
+            _codeSessions = _canCode && _user is not null ? await CodeStore.ListAsync(_userId) : [];
+        }
+        catch
+        {
+            _codeSessions = [];
+        }
+    }
+
+    private void OnCodeSessionsChanged() =>
+        _ = InvokeAsync(async () =>
+        {
+            await LoadCodeAsync();
+            StateHasChanged();
+        });
+
+    private async Task DeleteCodeAsync(Guid id)
+    {
+        _pendingDelete = null;
+        await CodeStore.DeleteAsync(id);
+        CodeEvents.NotifyChanged();
+        if (Nav.ToBaseRelativePath(Nav.Uri).Equals($"code/{id}", StringComparison.OrdinalIgnoreCase))
+        {
+            Nav.NavigateTo("code");
+        }
+    }
+
     private IJSObjectReference? _js;
 
     /// <summary>The signed-in user, whose chats the list shows; null until loaded, or if the account was deleted meanwhile.</summary>
@@ -255,9 +366,12 @@
     {
         Events.Changed += OnConversationsChanged;
         UserEvents.Changed += OnUserChanged;
+        CodeEvents.Changed += OnCodeSessionsChanged;
         Nav.LocationChanged += OnLocationChanged;
+        _codeMode = IsCodePath(Nav.ToBaseRelativePath(Nav.Uri));
         await LoadUserAsync();
         await LoadAsync();
+        await LoadCodeAsync();
     }
 
     private async Task LoadUserAsync()
@@ -270,6 +384,7 @@
             return;
         }
         _userId = _user.Id;
+        _canCode = await CurrentUser.CanAdministerAsync();
     }
 
     private void OnUserChanged() =>
@@ -287,10 +402,18 @@
         }
     }
 
-    /// <summary>On phones the list is a collapse; fold it away once a link has navigated.</summary>
+    /// <summary>On phones the list is a collapse; fold it away once a link has navigated. The list follows Chat / Code.</summary>
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e) =>
         _ = InvokeAsync(async () =>
         {
+            var codeMode = IsCodePath(Nav.ToBaseRelativePath(e.Location));
+            if (codeMode != _codeMode)
+            {
+                _codeMode = codeMode;
+                _pendingDelete = null;
+                _renaming = null;
+                StateHasChanged();
+            }
             if (_js is not null)
             {
                 try
@@ -356,11 +479,13 @@
         }
     }
 
-    private void BeginRename(ConversationSummary c)
+    private void BeginRename(ConversationSummary c) => BeginRename(c.Id, c.Title);
+
+    private void BeginRename(Guid id, string title)
     {
         _pendingDelete = null;
-        _renaming = c.Id;
-        _renameText = c.Title;
+        _renaming = id;
+        _renameText = title;
         _renameError = null;
     }
 
@@ -387,6 +512,13 @@
 
         try
         {
+            if (_codeMode)
+            {
+                await CodeStore.SetTitleAsync(id, _renameText);
+                _renaming = null;
+                CodeEvents.NotifyChanged();
+                return;
+            }
             await Store.SetTitleAsync(id, _renameText);
             _renaming = null;
             Events.NotifyChanged();
@@ -415,6 +547,7 @@
     {
         Events.Changed -= OnConversationsChanged;
         UserEvents.Changed -= OnUserChanged;
+        CodeEvents.Changed -= OnCodeSessionsChanged;
         Nav.LocationChanged -= OnLocationChanged;
         if (_js is not null)
         {

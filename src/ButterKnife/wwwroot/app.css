@@ -91,3 +91,100 @@ h1:focus {
         right: 0.75rem;
         top: 0.5rem;
     }
+
+/* ---- Transcript text shared by the chat and Code pages. Global rather than scoped: replies are Markdig output,
+   which scoped CSS reaches only through ::deep, and both pages render them. ---- */
+
+/* Collapsible reasoning above a reply: a quiet box, capped so a long think does not dwarf the answer. */
+.msg-thinking summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.msg-thinking summary::-webkit-details-marker {
+    display: none;
+}
+
+.msg-thinking > div {
+    max-height: 18rem;
+    overflow-y: auto;
+    border-left: 2px solid var(--bs-border-color);
+}
+
+/* Mermaid diagrams and display math inside replies stay within the bubble. */
+.msg-markdown .mermaid svg {
+    max-width: 100%;
+    height: auto;
+}
+
+.msg-markdown .katex-display {
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+/* Rendered markdown inside replies (Markdig adds Bootstrap classes to tables/quotes/images; code blocks need these). */
+.msg-markdown > :last-child {
+    margin-bottom: 0;
+}
+
+.msg-markdown pre {
+    position: relative; /* anchors the copy button */
+    background: #282c34; /* matches the atom-one-dark highlight theme */
+    color: #abb2bf;
+    padding: 0.6rem 0.75rem;
+    border-radius: 0.375rem;
+    overflow-x: auto;
+}
+
+/* highlight.js styles the <code> too; the <pre> already provides the box. */
+.msg-markdown pre code.hljs {
+    padding: 0;
+    background: transparent;
+}
+
+/* Copy button in the top-right of a code block: quiet until hovered, always visible on touch screens. */
+.msg-markdown .code-copy {
+    position: absolute;
+    top: 0.3rem;
+    right: 0.3rem;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    color: #abb2bf;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.msg-markdown pre:hover .code-copy,
+.msg-markdown .code-copy:focus {
+    opacity: 1;
+}
+
+@media (hover: none) {
+    .msg-markdown .code-copy {
+        opacity: 1;
+    }
+}
+
+.msg-markdown code {
+    background: var(--bs-secondary-bg);
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.25rem;
+    font-size: 0.9em;
+}
+
+.msg-markdown pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+}
+
+/* Mermaid renders into a <pre class="mermaid">; it must not inherit the dark code-box colours, since the diagram's
+   own theme follows the colour mode (default on light, dark on dark) and dark arrows would vanish on a dark box. */
+.msg-markdown pre.mermaid {
+    background: var(--bs-tertiary-bg);
+    color: var(--bs-body-color);
+    text-align: center;
+}

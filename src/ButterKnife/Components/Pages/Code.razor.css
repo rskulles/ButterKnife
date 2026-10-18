@@ -1,0 +1,103 @@
+/* Only what Bootstrap utilities cannot express; the Markdown and reasoning styles are shared in app.css. */
+
+/* Same frame as the chat page: the transcript is the flex child that scrolls. */
+.code-frame {
+    min-height: 0;
+    position: relative; /* anchors the "Jump to latest" pill the JS module adds */
+}
+
+.code-frame ::deep .jump-to-latest {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 5;
+}
+
+.code-messages {
+    flex: 1 1 0;
+    min-height: 0;
+}
+
+.code-folder {
+    max-width: 16rem;
+}
+
+/* The user's prompts: a bubble that hugs its text, right-aligned. Replies run full width like a document. */
+.msg {
+    width: fit-content;
+    max-width: 85%;
+}
+
+.msg-bubble {
+    width: fit-content;
+    max-width: 100%;
+}
+
+/* A tool call: one quiet line that unfolds into its output or diff. */
+.code-tool summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.code-tool summary::-webkit-details-marker {
+    display: none;
+}
+
+.code-output {
+    max-height: 20rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.8rem;
+    background: var(--bs-tertiary-bg);
+    color: var(--bs-body-color);
+}
+
+/* Diffs: one row per line, added and removed lines tinted with Bootstrap's subtle colours so both modes work. */
+.code-diff {
+    font-size: 0.8rem;
+    max-height: 28rem;
+    overflow: auto;
+    background: var(--bs-body-bg);
+}
+
+.diff-line {
+    white-space: pre;
+    padding: 0 0.5rem 0 0;
+    min-width: fit-content;
+}
+
+.diff-sign {
+    display: inline-block;
+    width: 1.5rem;
+    text-align: center;
+    user-select: none;
+    color: var(--bs-secondary-color);
+}
+
+.diff-added {
+    background: var(--bs-success-bg-subtle);
+}
+
+.diff-removed {
+    background: var(--bs-danger-bg-subtle);
+}
+
+.diff-gap {
+    padding-left: 0.5rem;
+    background: var(--bs-tertiary-bg);
+}
+
+/* The compaction checkpoint: earlier messages are sent as a summary from here on. */
+.code-checkpoint {
+    border-top: 1px dashed var(--bs-border-color);
+}
+
+/* Slash command suggestions: floats above the composer, as wide as it needs up to the composer's width. */
+.code-command-menu {
+    z-index: 10;
+    min-width: min(28rem, 100%);
+    max-width: 100%;
+    max-height: 18rem;
+    overflow-y: auto;
+}
