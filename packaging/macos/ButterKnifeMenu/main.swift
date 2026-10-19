@@ -1,28 +1,42 @@
 // ButterKnife menu bar helper (macOS). The .app's main executable: starts the ButterKnife server that sits beside
-// it in Contents/MacOS, shows a menu bar item (Open, Copy address for phone, Quit), opens the browser once the
-// server reports its address, and stops the server when quitting or when the server exits on its own (Settings →
-// Quit in the web UI). Built by tools/make-macos-app.sh with swiftc; no Xcode project.
+// it in Contents/MacOS, shows a menu bar item (Open, Open in Browser, Copy address for phone, Quit), shows the UI in
+// its own window (AppWindow.swift) once the server reports its address, and stops the server when quitting or when
+// the server exits on its own (Settings → Quit in the web UI). Built by tools/make-macos-app.sh with swiftc from the
+// .swift files in this folder; no Xcode project.
 import AppKit
 import Foundation
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
+    private var windowController: AppWindowController!
     private var openItem: NSMenuItem!
     private var copyItem: NSMenuItem!
     private var server: Process?
     private var localUrl = URL(string: "http://localhost:5175/")!
     private var lanUrl: URL?
-    private var browserOpened = false
     private var quitting = false
     private var log: FileHandle?
     private var buffer = Data()
     private var signalSources: [DispatchSourceSignal] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        windowController = AppWindowController()
+        NSApp.mainMenu = AppMenus.build(target: self, window: windowController)
         buildMenu()
         openLog()
         installSignalHandlers()
         startServer()
+        // The window opens at once with "Starting…"; BUTTERKNIFE_NO_BROWSER keeps it closed (start in the menu bar only).
+        if ProcessInfo.processInfo.environment["BUTTERKNIFE_NO_BROWSER"] == nil {
+            windowController.show()
+        }
+    }
+
+    /// Clicking the Dock icon (or opening the app again from Finder) brings the window back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        windowController.show()
+        return true
     }
 
     /// `kill`, logout and the like send SIGTERM/SIGINT; route them through the normal quit so the server is stopped too.
@@ -47,14 +61,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.toolTip = "ButterKnife (starting…)"
 
         let menu = NSMenu()
-        openItem = NSMenuItem(title: "Open ButterKnife", action: #selector(openBrowser), keyEquivalent: "o")
+        openItem = NSMenuItem(title: "Open ButterKnife", action: #selector(openWindow), keyEquivalent: "o")
         openItem.target = self
+        let browserItem = NSMenuItem(title: "Open in Browser", action: #selector(openBrowser), keyEquivalent: "")
+        browserItem.target = self
         copyItem = NSMenuItem(title: "Copy address for phone", action: #selector(copyAddress), keyEquivalent: "")
         copyItem.target = self
         copyItem.isEnabled = false
         let quitItem = NSMenuItem(title: "Quit ButterKnife", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(openItem)
+        menu.addItem(browserItem)
         menu.addItem(copyItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
@@ -133,13 +150,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         copyItem.isEnabled = lanUrl != nil
         statusItem.button?.toolTip = lanUrl.map { "ButterKnife at \(localUrl) (network: \($0))" } ?? "ButterKnife at \(localUrl)"
-        if !browserOpened && ProcessInfo.processInfo.environment["BUTTERKNIFE_NO_BROWSER"] == nil {
-            browserOpened = true
-            NSWorkspace.shared.open(localUrl)
-        }
+        windowController.serverStarted(at: localUrl)
     }
 
-    @objc private func openBrowser() { NSWorkspace.shared.open(localUrl) }
+    @objc func openWindow() { windowController.show() }
+
+    @objc func openBrowser() { NSWorkspace.shared.open(windowController.currentUrl ?? localUrl) }
+
+    @objc func newChat() { windowController.navigate(to: "/") }
+
+    @objc func newCodeSession() { windowController.navigate(to: "/code") }
+
+    @objc func openSettings() { windowController.navigate(to: "/settings") }
 
     @objc private func copyAddress() {
         let pasteboard = NSPasteboard.general
@@ -164,8 +186,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.setActivationPolicy(.accessory)
-app.run()
+// Top-level code runs on the main thread; say so, since the delegate and window are main-actor types.
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory) // menu bar only until the window is shown (Info.plist sets LSUIElement too)
+    withExtendedLifetime(delegate) { app.run() }
+}

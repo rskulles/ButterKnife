@@ -28,11 +28,12 @@ at your Ollama or LM Studio box, and start talking. Nothing leaves the house.
 - **Windows:** unzip and run `ButterKnife.exe`. A butter knife shows up in the system tray; click it to open
   ButterKnife, right-click to quit. If Windows gives you the "unrecognised app" screen the first time, choose *More
   info*, then *Run anyway*.
-- **macOS:** open the disk image (Apple Silicon or Intel) and drag ButterKnife to Applications. It lives in the menu
-  bar, no Dock icon.
+- **macOS:** open the disk image (Apple Silicon or Intel) and drag ButterKnife to Applications. It opens in its own
+  window, with no address bar and no back button to lose your place. Close the window and it keeps running in the
+  menu bar; click the Dock icon or the menu bar item to bring it back.
 - **Linux:** unpack the archive and run `./ButterKnife`.
 
-ButterKnife pops open in your browser. On Windows and Linux everything it saves sits in a `data` folder next to the
+On Windows and Linux ButterKnife pops open in your browser, and everything it saves sits in a `data` folder next to the
 program, so backing it up or moving it is a copy and paste. On a Mac it's in `~/Library/Application Support/ButterKnife`.
 
 **2. Point it at a model.** Go to **Settings → Connections** and press *Find servers on my network*; anything that

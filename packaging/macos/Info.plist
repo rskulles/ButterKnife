@@ -13,9 +13,12 @@
     <key>CFBundleVersion</key><string>__VERSION__</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>LSMinimumSystemVersion</key><string>12.0</string>
-    <!-- A server with a browser UI: no Dock icon or menu bar. Quit from Settings in the app. -->
+    <!-- Starts as a menu bar item; the helper switches to a regular app (Dock icon, menus) while its window is open. -->
     <key>LSUIElement</key><true/>
     <key>NSHumanReadableCopyright</key><string>Copyright Roy Skullestad. PolyForm Noncommercial License 1.0.0.</string>
+    <key>NSMicrophoneUsageDescription</key><string>ButterKnife listens when you press the microphone button, to turn your speech into a message.</string>
+    <!-- The window loads the local server over plain http (localhost, or this Mac's address on the network). -->
+    <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
     <key>NSLocalNetworkUsageDescription</key><string>ButterKnife talks to LLM servers on your local network and can be opened from other devices on it.</string>
 </dict>
 </plist>

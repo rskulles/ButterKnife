@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The menu bar helper and its window (the bundle's main executable). Under the hardened runtime the web view may
+         only use the microphone (dictation) with this; macOS still asks the user, using NSMicrophoneUsageDescription. -->
+    <key>com.apple.security.device.audio-input</key><true/>
+</dict>
+</plist>
