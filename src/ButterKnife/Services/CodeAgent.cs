@@ -133,6 +133,7 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
 
     public async Task<CodeTurnEnd> RunAsync(List<ChatMessage> history, ICodeAgentObserver observer, CancellationToken cancellationToken)
     {
+        var failedCalls = new HashSet<string>(StringComparer.Ordinal);
         for (var step = 0; step < MaxSteps; step++)
         {
             var readOnly = Mode == CodePermissionMode.Plan;
@@ -237,10 +238,22 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
                 {
                     result = await ExecuteAsync(invocation, observer, cancellationToken);
                 }
-                await FinishAsync(invocation, result, history, observer);
+                await FinishAsync(invocation, NoteRepeat(calls[i], result, failedCalls), history, observer);
             }
         }
         return CodeTurnEnd.StepLimit;
+    }
+
+    public const string RepeatNote = "This is exactly the same call as one that already failed in this task. Do not send it again: change it using the error above (for edit_file, copy old_string from the lines it shows).";
+
+    /// <summary>A failing call the model already made, word for word, gets that pointed out: small models otherwise loop on it.</summary>
+    private static ToolResult NoteRepeat(ToolCall call, ToolResult result, HashSet<string> failedCalls)
+    {
+        if (!result.IsError)
+        {
+            return result;
+        }
+        return failedCalls.Add(call.Name + "\n" + call.Arguments) ? result : result with { Output = $"{result.Output}\n\n{RepeatNote}" };
     }
 
     /// <summary>
@@ -439,9 +452,10 @@ public static class CodePrompt
 
             How to work:
             - Explore before changing anything: use list_files and grep to find the relevant code, then read_file it.
-            - Make small, targeted changes with edit_file. old_string must be copied exactly from read_file output
-              (without the line-number prefix), with enough context to be unique. Use write_file only for new files or
-              complete rewrites.
+            - Make small, targeted changes with edit_file. Copy old_string from your most recent read_file output of
+              that file (without the line-number prefix), never from memory, and keep it to the few lines that change
+              plus a line of context; make several small edits rather than one big one. If an edit fails, the error
+              shows the file's real lines: copy from those. Use write_file only for new files or complete rewrites.
             - After changing code, build or run the tests with run_command when the project has them, and fix what fails.
             - run_command works like a terminal: cd and exported variables carry over to the next command. Start servers,
               watchers and other long-running commands with background: true, check them with command_output, and stop

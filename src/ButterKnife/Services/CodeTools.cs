@@ -145,7 +145,7 @@ public static class CodeTools
             },"required":["pattern"]}
             """),
         ToolDefinition.Create(EditFile,
-            "Replace text in a file. old_string must match the file exactly, including indentation and line breaks, and must occur exactly once unless replace_all is true. Read the file first. Include enough surrounding lines to make old_string unique.",
+            "Replace text in a file. Copy old_string from your most recent read_file output of that file (without the line numbers), not from memory: it must match the file, including line breaks, and occur exactly once unless replace_all is true. Keep it short: the lines that change plus a line of context. For several changes, make several edit_file calls.",
             """
             {"type":"object","properties":{
               "path":{"type":"string","description":"File path relative to the project folder"},
@@ -519,17 +519,10 @@ public static class CodeTools
             newString = newString.Replace("\r\n", "\n").Replace("\n", "\r\n");
         }
 
-        var occurrences = CountOccurrences(original, oldString);
-        if (occurrences == 0)
-        {
-            throw new CodeToolException($"old_string was not found in {relative}. Read the file again and copy the text exactly, including indentation.");
-        }
-        if (occurrences > 1 && !replaceAll)
-        {
-            throw new CodeToolException($"old_string occurs {occurrences} times in {relative}. Include more surrounding lines to make it unique, or set replace_all to true.");
-        }
-
-        var updated = replaceAll ? original.Replace(oldString, newString, StringComparison.Ordinal) : ReplaceFirst(original, oldString, newString);
+        // Exact first; then help with pasted line numbers and indentation slips; otherwise an error showing the closest real lines.
+        var plan = EditMatcher.Plan(original, oldString, newString, replaceAll, relative);
+        var updated = plan.Updated;
+        var occurrences = plan.Occurrences;
         var diff = LineDiff.Compute(original, updated);
         return new ToolInvocation(call, $"Edit {relative}", "pencil-square", ToolPermission.Edit,
             async (_, ct) =>
@@ -541,7 +534,8 @@ public static class CodeTools
                 }
                 await File.WriteAllTextAsync(full, updated, ct);
                 var summary = replaceAll && occurrences > 1 ? $"Replaced {occurrences} occurrences in {relative}." : $"Edited {relative}.";
-                return new ToolResult($"{summary} (+{diff.Added} −{diff.Removed} lines)", false, diff.ToUnified());
+                var note = plan.Note is null ? "" : $" Note: {plan.Note}";
+                return new ToolResult($"{summary} (+{diff.Added} −{diff.Removed} lines){note}", false, diff.ToUnified());
             })
         { Path = relative, Diff = diff };
     }
@@ -770,22 +764,6 @@ public static class CodeTools
         {
             return false;
         }
-    }
-
-    private static int CountOccurrences(string text, string value)
-    {
-        var count = 0;
-        for (var at = text.IndexOf(value, StringComparison.Ordinal); at >= 0; at = text.IndexOf(value, at + value.Length, StringComparison.Ordinal))
-        {
-            count++;
-        }
-        return count;
-    }
-
-    private static string ReplaceFirst(string text, string oldValue, string newValue)
-    {
-        var at = text.IndexOf(oldValue, StringComparison.Ordinal);
-        return string.Concat(text.AsSpan(0, at), newValue, text.AsSpan(at + oldValue.Length));
     }
 
     private static string Truncate(string text, int max) => text.Length <= max ? text : text[..max] + "…";

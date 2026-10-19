@@ -113,6 +113,21 @@ public sealed class CodeAgentTests : IDisposable
     }
 
     [Fact]
+    public async Task ARepeatedFailingCallIsPointedOut()
+    {
+        var bad = new ToolCall("x1", CodeTools.EditFile, """{"path":"notes.md","old_string":"nowhere","new_string":"x"}""");
+        var again = bad with { Id = "x2" };
+        var client = new ScriptedClient([bad], [again]);
+        var history = new List<ChatMessage> { new(ChatRole.User, "edit") };
+
+        await new CodeAgent(client, "m", _workspace) { Mode = CodePermissionMode.Auto }.RunAsync(history, new RecordingObserver(PermissionChoice.Allow), CancellationToken.None);
+
+        var results = history.Where(m => m.Role == ChatRole.Tool).ToList();
+        Assert.DoesNotContain(CodeAgent.RepeatNote, results[0].Content);
+        Assert.Contains(CodeAgent.RepeatNote, results[1].Content);
+    }
+
+    [Fact]
     public async Task PlanModeOffersNoEditTools()
     {
         var client = new ScriptedClient([]);
