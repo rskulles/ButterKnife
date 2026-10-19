@@ -95,8 +95,8 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
 
     public CodePermissionMode Mode { get; set; } = CodePermissionMode.Ask;
 
-    /// <summary>Command prefixes the user allowed for this session ("always allow").</summary>
-    public HashSet<string> AllowedCommands { get; } = new(StringComparer.Ordinal);
+    /// <summary>Command prefixes the user allowed for this session ("always allow"); the page passes the shell's set so they last.</summary>
+    public HashSet<string> AllowedCommands { get; init; } = new(StringComparer.Ordinal);
 
     public ChatOptions Options { get; set; } = ChatOptions.Default;
 

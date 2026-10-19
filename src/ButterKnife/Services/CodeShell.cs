@@ -56,6 +56,9 @@ public sealed class CodeShell : IDisposable
     /// <summary>The project folder.</summary>
     public string Root { get; }
 
+    /// <summary>Command prefixes the user allowed "always" in this session (CodeAgent.AllowedCommands); kept here so they outlive page reloads.</summary>
+    public HashSet<string> AllowedCommands { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Where the next command starts: where the last one ended (the project folder until something cds).</summary>
     public string WorkingDirectory { get; private set; }
 

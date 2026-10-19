@@ -22,6 +22,11 @@ builder.Services.AddSingleton<UpdateChecker>();
 // Code tab: one shell per session (working directory, environment, background commands), kept across page reloads and
 // stopped with the session or when the host shuts down and disposes this singleton.
 builder.Services.AddSingleton<CodeShellRegistry>();
+// Code turns and chat replies run here, not in the page, so leaving or reloading a page does not stop them.
+builder.Services.AddSingleton<CodeRunRegistry>();
+builder.Services.AddSingleton<ChatRunRegistry>();
+builder.Services.AddSingleton<DraftStore>(); // unsent messages, per user and chat/session, in memory
+builder.Services.AddScoped<ReturnLocation>(); // per browser connection: where Settings' back link goes
 
 var app = builder.Build();
 

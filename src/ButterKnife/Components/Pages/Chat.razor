@@ -5,6 +5,7 @@
 @using ButterKnife.Options
 @using Microsoft.Extensions.Options
 @implements IAsyncDisposable
+@implements IChatRunView
 @inject ILlmClientRegistry Registry
 @inject ModelCatalog Catalog
 @inject IJSRuntime Js
@@ -12,6 +13,8 @@
 @inject IConversationStore Store
 @inject IPersonaStore Personas
 @inject ConversationEvents Events
+@inject ChatRunRegistry ChatRuns
+@inject DraftStore Drafts
 @inject ConnectionEvents ConnectionEvents
 @inject NavigationManager Nav
 @inject IOptions<LlmOptions> LlmOptions
@@ -708,8 +711,16 @@
     private bool _isStreaming;
     private bool _loadingModels;
 
+    /// <summary>Picture generation's cancellation; a chat reply's belongs to its server-side run (see ChatRunRegistry).</summary>
     private CancellationTokenSource? _generation;
     private readonly CancellationTokenSource _disposed = new();
+
+    /// <summary>The reply streaming in this conversation (on the server), the turn showing it, and this page's attachment.</summary>
+    private ChatRun? _liveRun;
+    private ChatTurn? _liveReply;
+    private IDisposable? _runView;
+    private TaskCompletionSource? _runDone;
+    private long _lastStreamRender;
 
     /// <summary>The user turn being edited in place, if any, and its draft text.</summary>
     private ChatTurn? _editing;
@@ -788,6 +799,28 @@
         if (Id is null)
         {
             _personaKey = DefaultPersonaKey();
+            RestoreDraft();
+        }
+    }
+
+    // ---- drafts: what is typed or attached survives leaving the chat, Settings and reloads (DraftStore) ----
+
+    private string DraftKey => _conversationId is { } id ? $"chat:{id}" : "chat:new";
+
+    /// <summary>The key whose draft is in the composer: renders before the restore must not save an empty composer over it.</summary>
+    private string? _draftKeyRestored;
+
+    private void RestoreDraft()
+    {
+        _draftKeyRestored = DraftKey;
+        var draft = Drafts.Get(_userId, DraftKey);
+        _input = draft?.Text ?? "";
+        _pendingImages.Clear();
+        _pendingFiles.Clear();
+        if (draft is not null)
+        {
+            _pendingImages.AddRange(draft.Images);
+            _pendingFiles.AddRange(draft.Files);
         }
     }
 
@@ -883,10 +916,11 @@
             return; // same conversation (including the navigation we trigger ourselves after creating one)
         }
 
-        Stop(); // navigating away mid-generation cancels it; the partial reply is persisted by SendAsync
+        DetachRun(); // a reply streaming here carries on (and saves itself); this page just stops showing it
         _turns.Clear();
         _error = null;
         _conversationId = Id;
+        RestoreDraft();
         _title = null;
         _options = ChatOptions.Default;
         _instructions = null;
@@ -942,10 +976,36 @@
         _selectedKey = ModelDescriptor.MakeKey(conversation.ConnectionId, conversation.Model);
         ReconcileSelection();
         _ = RefreshContextWindowAsync();
+
+        // A reply still streaming (started before a reload, or on another device): show it and follow it.
+        if (ChatRuns.Find(id, _userId) is { } run)
+        {
+            var reply = run.ContinueMessageId is { } extended && _turns.FirstOrDefault(t => t.MessageId == extended) is { } existing
+                ? existing
+                : null;
+            if (reply is null)
+            {
+                reply = new ChatTurn(ChatRole.Assistant, "", Markdown);
+                _turns.Add(reply);
+            }
+            reply.ModelName = run.Model;
+            reply.StreamFrom(run.StartedAt);
+            if (run.AlternativeModel is { } alternativeModel)
+            {
+                reply.Alternative = new ChatTurn(ChatRole.Assistant, "", Markdown) { ModelName = alternativeModel };
+                reply.Alternative.StreamFrom(run.StartedAt);
+            }
+            _ = WatchRunAsync(run, reply);
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (_draftKeyRestored == DraftKey)
+        {
+            Drafts.Save(_userId, DraftKey, _input, _pendingImages, _pendingFiles); // cheap when nothing changed
+        }
+
         if (firstRender)
         {
             _js = await Js.InvokeAsync<IJSObjectReference>("import", "./Components/Pages/Chat.razor.js");
@@ -1084,7 +1144,12 @@
         });
 
 
-    private void Stop() => _generation?.Cancel();
+    /// <summary>Stop (or Esc): the reply streaming here, or a picture being generated. Leaving the page stops neither reply nor run.</summary>
+    private void Stop()
+    {
+        _liveRun?.Stop();
+        _generation?.Cancel();
+    }
 
     /// <summary>Called from JS when Enter (without Shift) is pressed in the textarea.</summary>
     [JSInvokable]
@@ -1207,6 +1272,11 @@
     /// cut-off reply (the history then ends with that partial reply, which the backends treat as a prefix to extend).
     /// Persists the outcome and refreshes the context meter.
     /// </summary>
+    /// <summary>
+    /// The single path for send, edit-and-resend, regenerate, retry and continue: the reply streams on the server
+    /// (ChatRunRegistry), which saves it however it ends, and this page attaches to show it. Returns when the reply ends,
+    /// or when this page stops showing it.
+    /// </summary>
     private async Task StreamReplyAsync(Guid conversationId, ModelDescriptor model, List<ChatMessage> history, ChatTurn? continueTurn = null)
     {
         _canRetry = false;
@@ -1220,235 +1290,173 @@
             _turns.Add(reply);
         }
 
-        _isStreaming = true;
-        _generation = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
-        var token = _generation.Token;
-
-        // A comparison answer streams in parallel into a shadow turn shown beside the reply; it is not stored
-        // unless the user keeps it. Not for continuations, which extend one specific reply.
-        Task? alternative = null;
-        if (continueTurn is null && CompareModel is { } other && other.ConnectionId != Guid.Empty)
-        {
-            var shadow = new ChatTurn(ChatRole.Assistant, "", Markdown) { ModelName = other.Model, IsStreaming = true };
-            reply.Alternative = shadow;
-            alternative = StreamIntoAsync(shadow, other, history, token);
-        }
-
-        await RenderAndScrollAsync(force: true);
-
-        string? completedText = null;
-        TokenUsage? usage = null;
+        ChatRun run;
         try
         {
-            var client = await Registry.GetAsync(model.ConnectionId, token);
-            var lastRender = Stopwatch.GetTimestamp();
-            var splitter = new ThinkTagSplitter(); // models that think inline as <think>…</think>
-
-            await foreach (var delta in client.StreamChatAsync(model.Model, history, _options, token))
+            var client = await Registry.GetAsync(model.ConnectionId, _disposed.Token);
+            // A comparison answer streams in parallel beside the reply; it is not stored unless the user keeps it. Not
+            // for continuations, which extend one specific reply.
+            ILlmClient? alternativeClient = null;
+            string? alternativeModel = null;
+            if (continueTurn is null && CompareModel is { } other && other.ConnectionId != Guid.Empty)
             {
-                if (delta.Usage is not null)
-                {
-                    usage = delta.Usage;
-                    reply.Usage = usage;
-                }
-                if (delta.Finish is { } finish)
-                {
-                    reply.Finish = finish;
-                }
-                if (delta.Reasoning is { } reasoning)
-                {
-                    reply.AppendReasoning(reasoning);
-                }
-
-                if (delta.Text is { } text)
-                {
-                    foreach (var piece in splitter.Feed(text))
-                    {
-                        if (piece.Reasoning is { } r)
-                        {
-                            reply.AppendReasoning(r);
-                        }
-                        if (piece.Text is { } t)
-                        {
-                            reply.Append(t);
-                        }
-                    }
-                }
-
-                if (Stopwatch.GetElapsedTime(lastRender) >= RenderInterval)
-                {
-                    await RenderAndScrollAsync();
-                    lastRender = Stopwatch.GetTimestamp();
-                }
+                alternativeClient = await Registry.GetAsync(other.ConnectionId, _disposed.Token);
+                alternativeModel = other.Model;
+                reply.Alternative = new ChatTurn(ChatRole.Assistant, "", Markdown) { ModelName = other.Model, IsStreaming = true };
             }
 
-            if (splitter.Flush() is { } tail)
+            var prompt = history.LastOrDefault(m => m.Role == ChatRole.User)?.Content ?? "";
+            run = ChatRuns.Start(new ChatRunStart(conversationId, _userId, client, model.Model, history, _options, _contextWindow, prompt,
+                SuggestTitle: _titlePending && continueTurn is null,
+                ContinueMessageId: continueTurn?.MessageId,
+                ContinueText: continueTurn?.Text,
+                ContinueReasoning: continueTurn is { Reasoning.Length: > 0 } c ? c.Reasoning : null,
+                AlternativeClient: alternativeClient,
+                AlternativeModel: alternativeModel));
+            if (continueTurn is null)
             {
-                if (tail.Reasoning is { } r)
-                {
-                    reply.AppendReasoning(r);
-                }
-                if (tail.Text is { } t)
-                {
-                    reply.Append(t);
-                }
-            }
-
-            completedText = reply.Text;
-            if (usage?.PromptTokens is { } promptTokens)
-            {
-                // What the next request will roughly start from: this prompt plus the reply we just got.
-                _contextTokens = promptTokens + (usage.CompletionTokens ?? reply.Chunks);
+                _titlePending = false;
             }
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
-        {
-            completedText = reply.Text; // keep whatever streamed before Stop / disconnect
-            reply.Stopped = true;
-            if (_disposed.IsCancellationRequested)
-            {
-                await PersistReplyAsync(conversationId, reply, completedText);
-                return; // circuit is gone; nothing to render
-            }
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            if (reply.Text.Length == 0 && reply.Alternative is null)
-            {
-                _turns.Remove(reply);
-                _canRetry = continueTurn is null; // nothing was written, so the request can go out again as it was
-            }
-        }
-        finally
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             reply.IsStreaming = false;
-            if (alternative is not null)
+            reply.Alternative = null;
+            _error = ex.Message;
+            if (continueTurn is null)
             {
-                // Keep rendering while the second model catches up; Stop cancels it through the same token.
-                while (!alternative.IsCompleted)
-                {
-                    await Task.WhenAny(alternative, Task.Delay(100));
-                    await RenderAndScrollAsync();
-                }
-                if (reply.Alternative is { } shadow)
-                {
-                    shadow.IsStreaming = false;
-                    if (alternative.IsFaulted)
-                    {
-                        shadow.Append(shadow.Text.Length == 0 ? $"({alternative.Exception?.GetBaseException().Message})" : $" ({alternative.Exception?.GetBaseException().Message})");
-                    }
-                    if (shadow.Text.Length == 0 && shadow.Reasoning.Length == 0)
-                    {
-                        reply.Alternative = null; // nothing to compare against
-                    }
-                }
+                _turns.Remove(reply);
+                _canRetry = true; // nothing was written, so the request can go out again as it was
             }
-            _isStreaming = false;
-            _generation?.Dispose();
-            _generation = null;
+            return;
         }
 
-        await PersistReplyAsync(conversationId, reply, completedText);
+        await WatchRunAsync(run, reply);
+    }
+
+    /// <summary>Shows a run in <paramref name="reply"/>: replays what streamed so far, follows it live, and waits for its end.</summary>
+    private async Task WatchRunAsync(ChatRun run, ChatTurn reply)
+    {
+        _runView?.Dispose();
+        _liveRun = run;
+        _liveReply = reply;
+        _isStreaming = true;
+        _runDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var done = _runDone.Task;
+        _runView = run.Attach(this);
+        await RenderAndScrollAsync(force: true);
+        await done;
+    }
+
+    /// <summary>Stops showing the reply here; it carries on and saves itself.</summary>
+    private void DetachRun()
+    {
+        _runView?.Dispose();
+        _runView = null;
+        _liveRun = null;
+        _liveReply = null;
+        _isStreaming = false;
+        _runDone?.TrySetResult();
+        _runDone = null;
+    }
+
+    // ---- the streaming reply (IChatRunView): called from the run's thread, or from Attach while replaying ----
+
+    public void Delta(bool alternative, ChatDelta delta) => _ = InvokeAsync(async () =>
+    {
+        var target = alternative ? _liveReply?.Alternative : _liveReply;
+        if (target is null)
+        {
+            return;
+        }
+        if (delta.Usage is { } usage)
+        {
+            target.Usage = usage;
+        }
+        if (delta.Finish is { } finish)
+        {
+            target.Finish = finish;
+        }
+        if (delta.Reasoning is { Length: > 0 } reasoning)
+        {
+            target.AppendReasoning(reasoning);
+        }
+        if (delta.Text is { Length: > 0 } text)
+        {
+            target.Append(text);
+        }
+        if (Stopwatch.GetElapsedTime(_lastStreamRender) >= RenderInterval)
+        {
+            _lastStreamRender = Stopwatch.GetTimestamp();
+            await RenderAndScrollAsync();
+        }
+    });
+
+    public void Ended(ChatRunResult result) => _ = InvokeAsync(async () =>
+    {
+        if (_liveReply is not { } reply || _liveRun is not { } run)
+        {
+            return;
+        }
+        var conversationId = run.ConversationId;
+        var continued = run.ContinueMessageId is not null;
+        DetachRun();
+
+        reply.IsStreaming = false;
+        reply.Stopped = result.Stopped;
+        reply.FinishWith(result.Stats);
+        if (result.MessageId is { } messageId)
+        {
+            reply.MessageId = messageId;
+            reply.CreatedAt ??= DateTimeOffset.Now;
+        }
+        if (reply.Alternative is { } shadow)
+        {
+            shadow.IsStreaming = false;
+            if (result.AlternativeStats is { } alternativeStats)
+            {
+                shadow.FinishWith(alternativeStats);
+            }
+            if (result.AlternativeError is { } alternativeError)
+            {
+                shadow.Append(shadow.Text.Length == 0 ? $"({alternativeError})" : $" ({alternativeError})");
+            }
+            if (shadow.Text.Length == 0 && shadow.Reasoning.Length == 0)
+            {
+                reply.Alternative = null; // nothing to compare against
+            }
+        }
+        if (result.Error is { } error)
+        {
+            _error = error;
+            if (reply.Text.Length == 0 && reply.Alternative is null && !continued)
+            {
+                _turns.Remove(reply);
+                _canRetry = true; // nothing was written, so the request can go out again as it was
+            }
+        }
+        if (result.ContextTokens is { } tokens)
+        {
+            _contextTokens = tokens; // what the next request will roughly start from
+        }
+
         _codeBlocksDirty = true;
         await RenderAndScrollAsync();
         if (_js is not null)
         {
-            await _js.InvokeVoidAsync("focus", _inputElement); // no token: after Stop it would already be cancelled and this call would throw
-        }
-
-        if (_titlePending && continueTurn is null && !string.IsNullOrWhiteSpace(completedText))
-        {
-            _titlePending = false;
-            var prompt = history.LastOrDefault(m => m.Role == ChatRole.User)?.Content ?? "";
-            _ = SuggestTitleAsync(conversationId, model, prompt, completedText);
-        }
-
-        await AfterReplyContextAsync(conversationId, model);
-    }
-
-    /// <summary>
-    /// Replaces the placeholder title (the first line of the prompt) with one the model suggests, in the background
-    /// after the first exchange. A rename in the meantime wins: the title is only written if the placeholder is still
-    /// what the store holds.
-    /// </summary>
-    private async Task SuggestTitleAsync(Guid conversationId, ModelDescriptor model, string prompt, string reply)
-    {
-        var placeholder = _title;
-        var suggested = await Titler.SuggestAsync(model.ConnectionId, model.Model, prompt, reply, _disposed.Token);
-        if (suggested is null || placeholder is null || suggested == placeholder || _disposed.IsCancellationRequested)
-        {
-            return;
-        }
-
-        try
-        {
-            var current = (await Store.ListAsync(_userId, _disposed.Token)).FirstOrDefault(c => c.Id == conversationId);
-            if (current is null || current.Title != placeholder)
+            try
             {
-                return;
+                await _js.InvokeVoidAsync("focus", _inputElement);
             }
-            await Store.SetTitleAsync(conversationId, suggested, _disposed.Token);
-        }
-        catch (Exception)
-        {
-            return; // the placeholder title is fine
-        }
-
-        if (_conversationId == conversationId)
-        {
-            _title = suggested;
-        }
-        Events.NotifyChanged();
-        await InvokeAsync(StateHasChanged);
-    }
-
-    /// <summary>Streams one model's answer into a turn (text, reasoning, finish, usage) without touching page state or the store.</summary>
-    private async Task StreamIntoAsync(ChatTurn target, ModelDescriptor model, List<ChatMessage> history, CancellationToken token)
-    {
-        var client = await Registry.GetAsync(model.ConnectionId, token);
-        var splitter = new ThinkTagSplitter();
-        await foreach (var delta in client.StreamChatAsync(model.Model, history, _options, token))
-        {
-            if (delta.Usage is not null)
+            catch (JSDisconnectedException)
             {
-                target.Usage = delta.Usage;
-            }
-            if (delta.Finish is { } finish)
-            {
-                target.Finish = finish;
-            }
-            if (delta.Reasoning is { } reasoning)
-            {
-                target.AppendReasoning(reasoning);
-            }
-            if (delta.Text is { } text)
-            {
-                foreach (var piece in splitter.Feed(text))
-                {
-                    if (piece.Reasoning is { } r)
-                    {
-                        target.AppendReasoning(r);
-                    }
-                    if (piece.Text is { } t)
-                    {
-                        target.Append(t);
-                    }
-                }
             }
         }
-        if (splitter.Flush() is { } tail)
+        if (_conversationId == conversationId && Selected is { } model)
         {
-            if (tail.Reasoning is { } r)
-            {
-                target.AppendReasoning(r);
-            }
-            if (tail.Text is { } t)
-            {
-                target.Append(t);
-            }
+            await AfterReplyContextAsync(conversationId, model);
         }
-    }
+    });
 
     /// <summary>Resolves a side-by-side comparison: keeping the alternative rewrites the stored reply with its text.</summary>
     private async Task KeepAsync(ChatTurn turn, bool keepPrimary)
@@ -1465,7 +1473,7 @@
             {
                 try
                 {
-                    await Store.SetMessageContentAsync(conversationId, messageId, turn.Text, turn.Reasoning.Length > 0 ? turn.Reasoning : null, turn.ModelName, turn.GetStats(), _disposed.Token); // the kept alternative's model and stats
+                    await Store.SetMessageContentAsync(conversationId, messageId, turn.Text, turn.Reasoning.Length > 0 ? turn.Reasoning : null, turn.ModelName, turn.DisplayStats ?? turn.GetStats(), _disposed.Token); // the kept alternative's model and stats
                 }
                 catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
                 {
@@ -1785,6 +1793,8 @@
         _conversationId = conversation.Id;
         _title = title;
         _titlePending = true;
+        Drafts.Clear(_userId, "chat:new"); // it was sent: the next new chat starts empty
+        _draftKeyRestored = DraftKey;
         Events.NotifyChanged();
         Nav.NavigateTo($"/chat/{conversation.Id}", replace: true); // same component instance; OnParametersSetAsync sees the id already loaded
         return conversation.Id;
@@ -1893,33 +1903,6 @@
         }
     }
 
-    private async Task PersistReplyAsync(Guid conversationId, ChatTurn reply, string? text)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            return;
-        }
-
-        try
-        {
-            var reasoning = reply.Reasoning.Length > 0 ? reply.Reasoning : null;
-            if (reply.MessageId is { } existing)
-            {
-                await Store.SetMessageContentAsync(conversationId, existing, text, reasoning, reply.ModelName, reply.GetStats(), CancellationToken.None); // continued reply
-            }
-            else
-            {
-                reply.MessageId = await Store.AppendMessageAsync(conversationId, new ChatMessage(ChatRole.Assistant, text) { Reasoning = reasoning, Model = reply.ModelName, Stats = reply.GetStats() }, CancellationToken.None);
-                reply.CreatedAt = DateTimeOffset.Now;
-            }
-            Events.NotifyChanged();
-        }
-        catch (Exception ex)
-        {
-            _error = $"Reply was not saved: {ex.Message}";
-        }
-    }
-
     /// <summary>"14:32" for today, "Sep 12, 14:32" otherwise (server-local time; the full date is in the tooltip).</summary>
     private static string FormatWhen(DateTimeOffset at)
     {
@@ -1986,6 +1969,7 @@
             }
         }
 
+        DetachRun(); // a streaming reply carries on and saves itself
         await _disposed.CancelAsync();
         _generation?.Dispose();
         _compaction?.Dispose();
@@ -2842,6 +2826,21 @@
             : null;
 
         public GenerationStats GetStats() => new(Elapsed, TimeToFirstToken, Chunks, Usage);
+
+        /// <summary>Starts streaming with the run's start time, for a page that attaches to a reply already under way.</summary>
+        public void StreamFrom(long startedAt)
+        {
+            IsStreaming = true;
+            _startedAt = startedAt;
+        }
+
+        /// <summary>The run measured the whole reply; show its stats from now on (this page may have seen only part of it).</summary>
+        public void FinishWith(GenerationStats stats)
+        {
+            StoredStats = stats;
+            Chunks = Math.Max(Chunks, stats.Chunks);
+            _startedAt = 0;
+        }
 
         public bool IsStreaming
         {

@@ -8,6 +8,7 @@
 @inject IJSRuntime JS
 @inject CurrentUser CurrentUser
 @inject UserEvents UserEvents
+@inject ReturnLocation ReturnTo
 
 <div class="page">
     <div class="sidebar">
@@ -52,8 +53,9 @@
                     @* Same bottom padding as NavMenu's footer so the buttons sit at the same height on both pages. *@
                     <div class="d-flex align-items-center justify-content-between gap-2 px-2 pt-2 pb-3 border-top flex-shrink-0">
                         <nav class="nav nav-pills">
-                            <NavLink class="nav-link text-nowrap px-2 py-1" href="" Match="NavLinkMatch.All">
-                                <i class="bi bi-arrow-left me-2" aria-hidden="true"></i>Back to chat
+                            @* Back to the chat or Code session this window came from (see ReturnLocation), not to a new chat. *@
+                            <NavLink class="nav-link text-nowrap px-2 py-1" href="@ReturnTo.Path" Match="NavLinkMatch.All">
+                                <i class="bi bi-arrow-left me-2" aria-hidden="true"></i>@(ReturnTo.IsCode ? "Back to Code" : "Back to chat")
                             </NavLink>
                         </nav>
                         <div class="flex-shrink-0"><ThemeToggle /></div>

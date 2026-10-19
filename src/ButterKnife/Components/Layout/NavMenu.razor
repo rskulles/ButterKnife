@@ -8,6 +8,9 @@
 @inject ICodeSessionStore CodeStore
 @inject CodeSessionEvents CodeEvents
 @inject CodeShellRegistry CodeShells
+@inject ReturnLocation ReturnTo
+@inject CodeRunRegistry CodeRuns
+@inject ChatRunRegistry ChatRuns
 
 @* The sidebar follows the page colour mode. On phones everything below the brand bar is a collapse; inside it the
    conversation list (the signed-in user's own chats) scrolls and a footer (who is signed in, Settings link,
@@ -348,6 +351,7 @@
     private async Task DeleteCodeAsync(Guid id)
     {
         _pendingDelete = null;
+        await CodeRuns.StopAsync(id); // a turn still running would otherwise save into a deleted session
         await CodeStore.DeleteAsync(id);
         CodeShells.Remove(id); // stops whatever the session left running in the background
         CodeEvents.NotifyChanged();
@@ -371,6 +375,7 @@
         CodeEvents.Changed += OnCodeSessionsChanged;
         Nav.LocationChanged += OnLocationChanged;
         _codeMode = IsCodePath(Nav.ToBaseRelativePath(Nav.Uri));
+        ReturnTo.Remember(Nav); // where Settings' back link goes
         await LoadUserAsync();
         await LoadAsync();
         await LoadCodeAsync();
@@ -408,6 +413,7 @@
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e) =>
         _ = InvokeAsync(async () =>
         {
+            ReturnTo.Remember(Nav);
             var codeMode = IsCodePath(Nav.ToBaseRelativePath(e.Location));
             if (codeMode != _codeMode)
             {
@@ -535,6 +541,7 @@
     private async Task DeleteAsync(Guid id)
     {
         _pendingDelete = null;
+        await ChatRuns.StopAsync(id); // a reply still streaming would otherwise save into a deleted chat
         await Store.DeleteAsync(id);
         Events.NotifyChanged();
 

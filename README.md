@@ -69,6 +69,9 @@ Wi‑Fi needs an account you make for them under **Settings → Users**, and the
   picture (or click "Redraw this picture" under one you made) and `/image make it night` starts from it; a strength
   slider in the model settings says how far the redraw may stray.
 - **A coding agent for your own models.** See [Code](#code) below.
+- **Nothing gets lost.** Leave a chat while it's answering, open Settings, reload the page or pick it up on another
+  device: the reply (or the Code task, permission prompt and all) keeps going, and whatever you'd typed or attached is
+  still waiting in the message box. Settings' back link takes you to where you were.
 - **Second chances.** Edit a message and resend it, regenerate a reply, continue one that got cut off, retry a
   request that failed, or branch a chat off from any point and take it somewhere else.
 - **Show your work.** Models that think out loud get a fold-out for their reasoning. Code comes highlighted with a

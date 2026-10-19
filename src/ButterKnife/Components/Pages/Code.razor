@@ -5,7 +5,7 @@
 @using ButterKnife.Options
 @using Microsoft.Extensions.Options
 @implements IAsyncDisposable
-@implements ICodeAgentObserver
+@implements ICodeRunView
 @inject ICodeSessionStore Store
 @inject CodeSessionEvents Events
 @inject ConnectionEvents ConnectionEvents
@@ -18,6 +18,8 @@
 @inject IJSRuntime Js
 @inject IOptions<LlmOptions> LlmOptions
 @inject CodeShellRegistry Shells
+@inject CodeRunRegistry Runs
+@inject DraftStore Drafts
 
 <PageTitle>@(_title is null ? "Code · ButterKnife" : $"{_title} · Code · ButterKnife")</PageTitle>
 
@@ -361,14 +363,14 @@ else if (_allowed is true)
     private string? _error;
     private bool _isRunning;
     private bool _titlePending;
-    private CancellationTokenSource? _run;
+
+    /// <summary>The Compact button's own cancellation (a turn's is the run's, see CodeRunRegistry).</summary>
+    private CancellationTokenSource? _compactRun;
     private readonly CancellationTokenSource _disposed = new();
 
-    /// <summary>The running agent, so a mode change during a turn applies to the calls still to come.</summary>
-    private CodeAgent? _agent;
-
-    /// <summary>Command prefixes allowed "always" in this page's lifetime; carried from turn to turn.</summary>
-    private readonly HashSet<string> _allowedCommands = new(StringComparer.Ordinal);
+    /// <summary>The session's running turn, if any, and this page's attachment to it (detaching never stops it).</summary>
+    private CodeRun? _liveRun;
+    private IDisposable? _runView;
 
     private CodeItem? _current;
     private long _lastRender;
@@ -418,6 +420,7 @@ else if (_allowed is true)
         }
 
         ConnectionEvents.Changed += OnConnectionsChanged;
+        Events.Changed += OnSessionsChanged;
         _ = InvokeAsync(async () =>
         {
             await RefreshModelsAsync();
@@ -432,18 +435,18 @@ else if (_allowed is true)
             return;
         }
 
-        Stop();
+        DetachRun();
         _items.Clear();
         _history = [];
         _error = null;
         _sessionId = Id;
+        RestoreDraft();
         _title = null;
         _contextTokens = null;
         _summary = null;
         _summaryThrough = 0;
         _showSummary = false;
         _titlePending = false;
-        _allowedCommands.Clear();
         _showPicker = false;
         AttachShell(Id is { } shellId ? Shells.Find(shellId) : null);
 
@@ -478,12 +481,20 @@ else if (_allowed is true)
             _error = $"The folder {session.Workspace} no longer exists. Start a new session to work elsewhere.";
         }
         _selectedKey = ModelDescriptor.MakeKey(session.ConnectionId, session.Model);
-        _history = session.Entries.Select(e => e.Message).ToList();
+        // A turn still running (started here before a reload, or on another page): show what was stored up to its
+        // prompt, then let the run replay the rest and carry on live.
+        var run = Runs.Find(id, _userId);
+        var entries = run is null ? session.Entries : session.Entries.Where(e => e.Id <= run.PromptMessageId).ToList();
+        _history = entries.Select(e => e.Message).ToList();
         _summary = session.Summary;
         _summaryThrough = _summary is null ? 0 : Math.Min(session.SummaryThrough, _history.Count);
-        for (var i = 0; i < session.Entries.Count; i++)
+        for (var i = 0; i < entries.Count; i++)
         {
-            AddLoaded(session.Entries[i], i);
+            AddLoaded(entries[i], i);
+        }
+        if (run is not null)
+        {
+            AttachRun(run);
         }
         _codeBlocksDirty = true;
         ReconcileSelection();
@@ -492,6 +503,11 @@ else if (_allowed is true)
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (_allowed is true && _draftKeyRestored == DraftKey)
+        {
+            Drafts.Save(_userId, DraftKey, _input, _pendingImages); // cheap when nothing changed
+        }
+
         if (_allowed is not true)
         {
             return;
@@ -555,7 +571,31 @@ else if (_allowed is true)
         return Task.CompletedTask;
     }
 
-    private void Stop() => _run?.Cancel();
+    /// <summary>Stop (or Esc): cancels the running turn or compaction. Leaving the page does not; see DetachRun.</summary>
+    private void Stop()
+    {
+        _liveRun?.Stop();
+        _compactRun?.Cancel();
+    }
+
+    private void AttachRun(CodeRun run)
+    {
+        _runView?.Dispose();
+        _liveRun = run;
+        _isRunning = true;
+        _runView = run.Attach(this); // replays the turn so far into this page, then follows it
+    }
+
+    /// <summary>Stops showing the run here; it carries on and saves as it goes.</summary>
+    private void DetachRun()
+    {
+        _runView?.Dispose();
+        _runView = null;
+        _liveRun = null;
+        _current = null;
+        _compacting = false;
+        _isRunning = false;
+    }
 
     private async Task RefreshModelsAsync()
     {
@@ -650,10 +690,7 @@ else if (_allowed is true)
             return;
         }
         _mode = mode;
-        if (_agent is not null)
-        {
-            _agent.Mode = mode;
-        }
+        _liveRun?.SetMode(mode);
         if (_sessionId is { } id)
         {
             await Store.SetModeAsync(id, mode, _disposed.Token);
@@ -787,6 +824,25 @@ else if (_allowed is true)
             }
         </div>
     </div>;
+
+    // ---------------------------------------------------------------- drafts (DraftStore): typed text and pictures survive leaving the page
+
+    private string DraftKey => _sessionId is { } id ? $"code:{id}" : "code:new";
+
+    /// <summary>The key whose draft is in the composer: renders before the restore must not save an empty composer over it.</summary>
+    private string? _draftKeyRestored;
+
+    private void RestoreDraft()
+    {
+        _draftKeyRestored = DraftKey;
+        var draft = Drafts.Get(_userId, DraftKey);
+        _input = draft?.Text ?? "";
+        _pendingImages.Clear();
+        if (draft is not null)
+        {
+            _pendingImages.AddRange(draft.Images);
+        }
+    }
 
     // ---------------------------------------------------------------- pictures
     private const int MaxImages = 6;
@@ -1027,6 +1083,8 @@ else if (_allowed is true)
                 _sessionId = session.Id;
                 _title = session.Title;
                 _titlePending = true;
+                Drafts.Clear(_userId, "code:new"); // it was sent: the next new session starts empty
+                _draftKeyRestored = DraftKey;
                 Events.NotifyChanged();
                 Nav.NavigateTo($"code/{session.Id}", replace: true);
             }
@@ -1044,22 +1102,23 @@ else if (_allowed is true)
             return;
         }
 
-        await RunTurnAsync(model, workspace, prompt);
+        await StartTurnAsync(model, workspace, prompt, _history[^1].Id ?? 0);
     }
 
-    private async Task RunTurnAsync(ModelDescriptor model, string workspace, string prompt)
+    /// <summary>
+    /// Starts the turn on the server (CodeRunRegistry) and attaches this page to it. From here the run saves everything;
+    /// the page only shows it, so navigating away or reloading does not stop it.
+    /// </summary>
+    private async Task StartTurnAsync(ModelDescriptor model, string workspace, string prompt, long promptMessageId)
     {
-        _isRunning = true;
-        _run = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
-        var token = _run.Token;
-        await ScrollAsync(force: true);
-
-        CodeTurnEnd? end = null; // null: stopped or failed
         try
         {
-            var client = await Registry.GetAsync(model.ConnectionId, token);
-            _history = CodeAgent.Repair(_history);
-            _agent = new CodeAgent(client, model.Model, new CodeWorkspace(workspace))
+            var client = await Registry.GetAsync(model.ConnectionId, _disposed.Token);
+            var shell = Shells.Get(_sessionId!.Value, workspace);
+            AttachShell(shell);
+            var history = CodeAgent.Repair(_history);
+            _history = history.ToList(); // the page keeps its own copy, updated from the run's events
+            var agent = new CodeAgent(client, model.Model, new CodeWorkspace(workspace))
             {
                 Mode = _mode,
                 Summary = _summary,
@@ -1068,110 +1127,21 @@ else if (_allowed is true)
                 AutoCompactThreshold = LlmOptions.Value.AutoCompactThreshold,
                 KeepRecentPrompts = KeepRecentPrompts,
                 // The stored count described the request before this prompt.
-                LastUsage = _contextTokens is { } tokens ? (tokens, _history.Count - 1) : null,
+                LastUsage = _contextTokens is { } tokens ? (tokens, history.Count - 1) : null,
+                AllowedCommands = shell.AllowedCommands, // "always allow" lasts as long as the session's shell
+                Shell = shell,
+                SupportsImages = _supportsImages,
             };
-            _agent.AllowedCommands.UnionWith(_allowedCommands);
-            _agent.Shell = AttachShell(Shells.Get(_sessionId!.Value, workspace));
-            _agent.SupportsImages = _supportsImages;
-            end = await _agent.RunAsync(_history, this, token);
+            var run = Runs.Start(new CodeRunStart(_sessionId!.Value, _userId, promptMessageId, agent, history,
+                model.ConnectionId, model.Model, prompt, _titlePending, _contextWindow, _contextTokens));
+            _titlePending = false;
+            AttachRun(run);
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
-        {
-            await SaveInterruptedAsync();
-        }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _error = ex is KeyNotFoundException ? "That model's connection no longer exists; pick another model." : ex.Message;
-            if (_current is { IsStreaming: true } current)
-            {
-                current.IsStreaming = false;
-                if (current.Text.Length == 0 && current.Reasoning.Length == 0)
-                {
-                    _items.Remove(current);
-                }
-            }
-            await SaveInterruptedAsync();
         }
-        finally
-        {
-            if (_agent is not null)
-            {
-                _allowedCommands.UnionWith(_agent.AllowedCommands);
-                if (_agent.Mode != _mode)
-                {
-                    // "Always allow" on an edit switched the session to accepting edits.
-                    _mode = _agent.Mode;
-                    await SaveQuietlyAsync(() => Store.SetModeAsync(_sessionId!.Value, _mode, CancellationToken.None));
-                }
-            }
-            _agent = null;
-            _current = null;
-            _compacting = false;
-            _isRunning = false;
-            _run.Dispose();
-            _run = null;
-            _codeBlocksDirty = true;
-            if (_sessionId is { } id)
-            {
-                await SaveQuietlyAsync(() => Store.SetContextAsync(id, _contextTokens, _contextWindow, CancellationToken.None));
-                Events.NotifyChanged(); // the sidebar orders sessions by activity
-            }
-        }
-
-        if (end == CodeTurnEnd.StepLimit)
-        {
-            _items.Add(new CodeItem(ItemKind.Assistant) { Note = $"Stopped after {CodeAgent.MaxSteps} steps. Say \"continue\" to let it carry on." });
-        }
-        await ScrollAsync(force: false);
-
-        if (_titlePending && end == CodeTurnEnd.Done && _sessionId is { } sessionId)
-        {
-            _titlePending = false;
-            var reply = _history.LastOrDefault(m => m.Role == ChatRole.Assistant)?.Content ?? "";
-            _ = SuggestTitleAsync(sessionId, model, prompt, reply);
-        }
-    }
-
-    /// <summary>
-    /// Stop (or an error) mid-turn: the partial reply is kept, and every tool call left without a result gets one, so
-    /// the next request is valid for servers that insist on an answer per call.
-    /// </summary>
-    private async Task SaveInterruptedAsync()
-    {
-        if (_sessionId is not { } id)
-        {
-            return;
-        }
-
-        if (_current is { IsStreaming: true } current)
-        {
-            current.IsStreaming = false;
-            current.Note = "Stopped.";
-            current.EndedAt = Stopwatch.GetTimestamp();
-            if (current.Text.Length > 0)
-            {
-                var partial = new ChatMessage(ChatRole.Assistant, current.Text.ToString().Trim()) { Reasoning = current.Reasoning.Length > 0 ? current.Reasoning.ToString() : null, Model = current.ModelName };
-                _history.Add(partial);
-                await SaveQuietlyAsync(() => Store.AppendAsync(id, partial, cancellationToken: CancellationToken.None));
-            }
-            else if (current.Reasoning.Length == 0)
-            {
-                _items.Remove(current);
-            }
-        }
-
-        var repaired = CodeAgent.Repair(_history);
-        foreach (var message in repaired.Where(m => !_history.Any(h => ReferenceEquals(h, m))))
-        {
-            await SaveQuietlyAsync(() => Store.AppendAsync(id, message, cancellationToken: CancellationToken.None));
-            if (_items.LastOrDefault(i => i.CallId == message.ToolCallId) is { } item)
-            {
-                item.State = ToolState.Failed;
-                item.Pending = null;
-                item.SetOutput(message.Content);
-            }
-        }
-        _history = repaired;
+        await ScrollAsync(force: true);
     }
 
     private async Task SaveQuietlyAsync(Func<Task> save)
@@ -1186,34 +1156,40 @@ else if (_allowed is true)
         }
     }
 
-    private async Task SuggestTitleAsync(Guid sessionId, ModelDescriptor model, string prompt, string reply)
-    {
-        var title = await Titler.SuggestAsync(model.ConnectionId, model.Model, prompt, reply, _disposed.Token);
-        if (title is null || _sessionId != sessionId)
+    /// <summary>The run suggests a title after the first turn (and the sidebar can rename); keep the page title in step.</summary>
+    private void OnSessionsChanged() =>
+        _ = InvokeAsync(async () =>
         {
-            return;
-        }
-        // Only replace the placeholder: a rename made meanwhile wins.
-        var current = (await Store.ListAsync(_userId, _disposed.Token)).FirstOrDefault(s => s.Id == sessionId);
-        if (current is null || current.Title != _title)
-        {
-            return;
-        }
-        await Store.SetTitleAsync(sessionId, title, _disposed.Token);
-        _title = title;
-        Events.NotifyChanged();
-        await InvokeAsync(StateHasChanged);
-    }
+            if (_sessionId is not { } id)
+            {
+                return;
+            }
+            try
+            {
+                var title = (await Store.ListAsync(_userId, _disposed.Token)).FirstOrDefault(s => s.Id == id)?.Title;
+                if (title is not null && title != _title)
+                {
+                    _title = title;
+                    StateHasChanged();
+                }
+            }
+            catch (Exception)
+            {
+                // cosmetic
+            }
+        });
 
-    // ---------------------------------------------------------------- the agent's callbacks (ICodeAgentObserver)
-    public void OnStepStarted()
+    // ---------------------------------------------------------------- the running turn (ICodeRunView)
+    // The run calls these from its own thread, or from Attach while replaying; each hops onto this page's renderer.
+
+    public void StepStarted(string model, long startedAt) => _ = InvokeAsync(() =>
     {
-        _current = new CodeItem(ItemKind.Assistant) { MessageIndex = _history.Count, IsStreaming = true, ModelName = Selected?.Model, StartedAt = Stopwatch.GetTimestamp() };
+        _current = new CodeItem(ItemKind.Assistant) { MessageIndex = _history.Count, IsStreaming = true, ModelName = model, StartedAt = startedAt };
         _items.Add(_current);
         RequestRender(force: true);
-    }
+    });
 
-    public void OnDelta(ChatDelta delta)
+    public void Delta(ChatDelta delta) => _ = InvokeAsync(() =>
     {
         if (_current is not { } item)
         {
@@ -1241,9 +1217,9 @@ else if (_allowed is true)
             }
         }
         RequestRender();
-    }
+    });
 
-    public async Task OnAssistantMessageAsync(ChatMessage message, GenerationStats stats)
+    public void AssistantMessage(ChatMessage message, GenerationStats stats) => _ = InvokeAsync(() =>
     {
         if (_current is { } item)
         {
@@ -1256,60 +1232,61 @@ else if (_allowed is true)
             }
         }
         _current = null;
+        _history.Add(message);
 
         foreach (var call in message.ToolCalls)
         {
             var (title, icon, command) = CodeTools.Label(call);
             _items.Add(new CodeItem(ItemKind.Tool) { MessageIndex = _history.Count - 1, CallId = call.Id, Title = title, Icon = icon, Command = command, State = ToolState.Queued });
         }
-
-        if (_sessionId is { } id)
-        {
-            await SaveQuietlyAsync(() => Store.AppendAsync(id, message with { Stats = stats }, cancellationToken: CancellationToken.None));
-        }
         RequestRender(force: true);
-    }
+    });
 
-    public async Task<PermissionDecision> RequestPermissionAsync(ToolInvocation invocation, CancellationToken cancellationToken)
+    public void PermissionRequested(ToolInvocation invocation) => _ = InvokeAsync(() =>
     {
         var item = ToolItem(invocation);
         item.State = ToolState.Waiting;
-        item.Pending = new TaskCompletionSource<PermissionDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
         item.Feedback = "";
         RequestRender(force: true);
-        try
+    });
+
+    public void PermissionAnswered(string callId, PermissionChoice choice) => _ = InvokeAsync(() =>
+    {
+        if (_items.LastOrDefault(i => i.CallId == callId) is { State: ToolState.Waiting } item)
         {
-            var decision = await item.Pending.Task.WaitAsync(cancellationToken);
-            item.Denied = decision.Choice == PermissionChoice.Deny;
-            return decision;
+            item.State = ToolState.Queued;
+            item.Denied = choice == PermissionChoice.Deny;
+            RequestRender(force: true);
         }
-        finally
+    });
+
+    /// <summary>Allow / Always / Deny on a waiting row: the run gets the answer, whichever page asked.</summary>
+    private void Answer(CodeItem item, PermissionChoice choice)
+    {
+        if (item.CallId is { } callId)
         {
-            item.Pending = null;
+            _liveRun?.Answer(callId, new PermissionDecision(choice, choice == PermissionChoice.Deny ? item.Feedback : null));
         }
     }
 
-    private void Answer(CodeItem item, PermissionChoice choice) =>
-        item.Pending?.TrySetResult(new PermissionDecision(choice, choice == PermissionChoice.Deny ? item.Feedback : null));
-
-    public void OnToolStarted(ToolInvocation invocation)
+    public void ToolStarted(ToolInvocation invocation, CodePermissionMode mode) => _ = InvokeAsync(() =>
     {
         var item = ToolItem(invocation);
         item.State = ToolState.Running;
-        _mode = _agent?.Mode ?? _mode; // "Allow all edits" has just switched the agent to accepting edits
+        _mode = mode; // "Allow all edits" may have just switched the session to accepting edits
         RequestRender(force: true);
-    }
+    });
 
-    public void OnToolOutput(ToolInvocation invocation, string chunk)
+    public void ToolOutput(string callId, string chunk) => _ = InvokeAsync(() =>
     {
-        if (_items.LastOrDefault(i => i.CallId == invocation.Call.Id) is { } item)
+        if (_items.LastOrDefault(i => i.CallId == callId) is { } item)
         {
             item.AppendOutput(chunk, MaxLiveOutputChars);
-            _ = InvokeAsync(() => RequestRender());
+            RequestRender();
         }
-    }
+    });
 
-    public async Task OnToolFinishedAsync(ToolInvocation invocation, ToolResult result, ChatMessage resultMessage)
+    public void ToolFinished(ToolInvocation invocation, ToolResult result, ChatMessage message) => _ = InvokeAsync(() =>
     {
         var item = ToolItem(invocation);
         item.State = item.Denied ? ToolState.Denied : result.IsError ? ToolState.Failed : ToolState.Done;
@@ -1319,32 +1296,88 @@ else if (_allowed is true)
         {
             item.Diff = LineDiffResult.FromUnified(result.Diff);
         }
-        if (_sessionId is { } id)
-        {
-            await SaveQuietlyAsync(() => Store.AppendAsync(id, resultMessage, result.Diff, cancellationToken: CancellationToken.None));
-        }
+        _history.Add(message);
         RequestRender(force: true);
-    }
+    });
 
-    public void OnCompacting()
+    public void Compacting() => _ = InvokeAsync(() =>
     {
         _compacting = true;
         RequestRender(force: true);
-    }
+    });
 
-    public async Task OnCompactedAsync(CodeCompaction compaction)
+    public void Compacted(CodeCompaction compaction) => _ = InvokeAsync(() =>
     {
         _compacting = false;
-        await ApplyCompactionAsync(compaction);
+        _summary = compaction.Summary;
+        _summaryThrough = compaction.Through;
+        _showSummary = false;
+        _contextTokens = null;
         RequestRender(force: true);
-    }
+    });
 
-    public void OnCompactionFailed(string error)
+    public void CompactionFailed(string error) => _ = InvokeAsync(() =>
     {
         _compacting = false;
         _error = $"Could not compact the session: {error}";
         RequestRender(force: true);
-    }
+    });
+
+    public void Interrupted(ChatMessage? partial, IReadOnlyList<ChatMessage> closed) => _ = InvokeAsync(() =>
+    {
+        if (_current is { IsStreaming: true } current)
+        {
+            current.IsStreaming = false;
+            current.Note = "Stopped.";
+            current.EndedAt = Stopwatch.GetTimestamp();
+            if (current.Text.Length == 0 && current.Reasoning.Length == 0)
+            {
+                _items.Remove(current);
+            }
+        }
+        _current = null;
+        if (partial is not null)
+        {
+            _history.Add(partial);
+        }
+        foreach (var message in closed)
+        {
+            _history.Add(message);
+            if (_items.LastOrDefault(i => i.CallId == message.ToolCallId) is { } item)
+            {
+                item.State = ToolState.Failed;
+                item.SetOutput(message.Content);
+            }
+        }
+        RequestRender(force: true);
+    });
+
+    public void Error(string message) => _ = InvokeAsync(() =>
+    {
+        _error ??= message;
+        RequestRender(force: true);
+    });
+
+    public void Ended(CodeRunResult result) => _ = InvokeAsync(async () =>
+    {
+        // The run's own record is the truth from here on (it includes anything this page saw only in part).
+        _history = result.History.ToList();
+        _mode = result.Mode;
+        _summary = result.Summary;
+        _summaryThrough = result.SummaryThrough;
+        _contextTokens = result.ContextTokens;
+        if (result.Error is { } error)
+        {
+            _error = error;
+        }
+        if (result.End == CodeTurnEnd.StepLimit)
+        {
+            _items.Add(new CodeItem(ItemKind.Assistant) { Note = $"Stopped after {CodeAgent.MaxSteps} steps. Say \"continue\" to let it carry on." });
+        }
+        DetachRun();
+        _codeBlocksDirty = true;
+        await ScrollAsync(force: false);
+    });
 
     /// <summary>The Compact button: summarise everything before the last few prompts now. Stop (or Esc) cancels.</summary>
     private async Task CompactNowAsync()
@@ -1358,8 +1391,8 @@ else if (_allowed is true)
         _isRunning = true;
         _compacting = true;
         _error = null;
-        _run = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
-        var token = _run.Token;
+        _compactRun = CancellationTokenSource.CreateLinkedTokenSource(_disposed.Token);
+        var token = _compactRun.Token;
         await ScrollAsync(force: true);
         try
         {
@@ -1384,8 +1417,8 @@ else if (_allowed is true)
         {
             _compacting = false;
             _isRunning = false;
-            _run.Dispose();
-            _run = null;
+            _compactRun.Dispose();
+            _compactRun = null;
         }
         await ScrollAsync(force: false);
     }
@@ -1645,8 +1678,10 @@ else if (_allowed is true)
 
     public async ValueTask DisposeAsync()
     {
+        DetachRun(); // the turn carries on without this page
         AttachShell(null);
         ConnectionEvents.Changed -= OnConnectionsChanged;
+        Events.Changed -= OnSessionsChanged;
         await _disposed.CancelAsync();
         if (_js is not null)
         {
@@ -1720,7 +1755,6 @@ else if (_allowed is true)
 
         /// <summary>Pictures attached to a prompt, or returned by read_file for a tool row.</summary>
         public IReadOnlyList<ChatImage> Images { get; set; } = ChatMessage.NoImages;
-        public TaskCompletionSource<PermissionDecision>? Pending { get; set; }
 
         public CodeItem Append(string text)
         {
