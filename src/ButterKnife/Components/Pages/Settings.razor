@@ -31,20 +31,23 @@ else
         case "personas" when _canAdminister:
             <PersonasSettings />
             break;
+        case "mcp" when _canAdminister:
+            <McpSettings />
+            break;
         case "users" when _canAdminister:
             <UsersSettings />
             break;
         case "data" when _canAdminister:
             <DataSettings />
             break;
-        case "general" or "connections" or "personas" or "users" or "data" when _user.IsAdmin:
+        case "general" or "connections" or "personas" or "mcp" or "users" or "data" when _user.IsAdmin:
             <h1 class="h4">Only from home</h1>
             <p class="text-muted">
                 You are an administrator, but @Title can only be changed from inside the house: on the computer running
                 ButterKnife or a device on the same network. From here you can chat and change your <a href="settings/account">Account</a>.
             </p>
             break;
-        case "general" or "connections" or "personas" or "users" or "data":
+        case "general" or "connections" or "personas" or "mcp" or "users" or "data":
             <h1 class="h4">Administrators only</h1>
             <p class="text-muted">Only an administrator can change @Title. Ask whoever runs this ButterKnife, or open <a href="settings/account">Account</a> for your own settings.</p>
             break;
@@ -78,6 +81,7 @@ else
         "account" => "Account",
         "connections" => "Connections",
         "personas" => "Personas",
+        "mcp" => "MCP servers",
         "users" => "Users",
         "data" => "Data",
         _ => "Not found",

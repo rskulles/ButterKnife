@@ -40,7 +40,7 @@ public sealed class SqliteCodeSessionStore(SqliteDatabase db) : ICodeSessionStor
         await using (var head = connection.CreateCommand())
         {
             head.CommandText = """
-                SELECT title, workspace, backend, model, permission_mode, context_tokens, context_window, created_at, updated_at, summary, summary_through
+                SELECT title, workspace, backend, model, permission_mode, context_tokens, context_window, created_at, updated_at, summary, summary_through, mcp_servers
                 FROM code_sessions WHERE id = $id AND user_id = $user;
                 """;
             head.Parameters.AddWithValue("$id", id.ToString("D"));
@@ -64,7 +64,10 @@ public sealed class SqliteCodeSessionStore(SqliteDatabase db) : ICodeSessionStor
                 reader.IsDBNull(10) ? 0 : (int)reader.GetInt64(10),
                 SqliteDatabase.Parse(reader.GetString(7)),
                 SqliteDatabase.Parse(reader.GetString(8)),
-                []);
+                [])
+            {
+                McpServers = reader.IsDBNull(11) ? null : Deserialize<Guid[]>(reader.GetString(11)),
+            };
         }
 
         var entries = new List<CodeEntry>();
@@ -238,6 +241,16 @@ public sealed class SqliteCodeSessionStore(SqliteDatabase db) : ICodeSessionStor
         cmd.CommandText = "UPDATE code_sessions SET context_tokens = $tokens, context_window = $window WHERE id = $id;";
         cmd.Parameters.AddWithValue("$tokens", (object?)tokens ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$window", (object?)window ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$id", id.ToString("D"));
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task SetMcpServersAsync(Guid id, IReadOnlyList<Guid>? serverIds, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await db.OpenAsync(cancellationToken);
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE code_sessions SET mcp_servers = $servers WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$servers", serverIds is null ? DBNull.Value : JsonSerializer.Serialize(serverIds));
         cmd.Parameters.AddWithValue("$id", id.ToString("D"));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }

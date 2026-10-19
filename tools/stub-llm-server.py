@@ -16,6 +16,8 @@ on it, run_command "ls -la", then a closing summary. A prompt containing "[quick
 one containing "[skill]" starts with read_skill explore-project; one containing "[look]" reads screenshot.png (an image, so the
 picture comes back to the model); one containing "[bg]" instead starts a background
 command, reads its output with command_output, then cds into src and runs pwd twice to show the directory sticking.
+One containing "[mcp]" calls the first offered MCP tools (named server__tool): server__echo with some text, then
+server__picture, as tools/stub-mcp-server.py offers them.
 fake-llama:8b, fake-gpt and fake-gpt-vision report tool support; fake-tiny:1b does not. fake-llama:8b and
 fake-gpt-vision can see images; the request log shows (role, image count) per message, so a picture from a tool shows
 up on the user message that follows the tool results for Ollama and OpenAI-compatible requests.
@@ -264,6 +266,16 @@ class H(BaseHTTPRequestHandler):
                 ("Now move into src and check where I am.", "run_command", {"command": "mkdir -p src && cd src && pwd"}),
                 ("The directory should have stuck.", "run_command", {"command": "pwd"}),
             ]
+        if "[mcp]" in prompt:
+            # MCP tools are offered as server__tool: echo something, then fetch a picture, through whatever server has them.
+            offered = [t.get("name") or (t.get("function") or {}).get("name") or "" for t in body["tools"]]
+            external = [n for n in offered if "__" in n]
+            echo = next((n for n in external if n.endswith("__echo")), None)
+            picture = next((n for n in external if n.endswith("__picture")), None)
+            steps = ([("Let me try the MCP server.", echo, {"text": "hello from the stub model"})] if echo else []) + \
+                    ([("And a picture from it.", picture, {})] if picture else [])
+            if not steps and external:
+                steps = [("Let me try an MCP tool.", external[0], {})]
         # One call per request, in order: the number of calls made since the prompt says which step is next.
         step = None if "[quick]" in prompt or len(called) >= len(steps) else steps[len(called)]
         text, call = (step[0], (step[1], step[2])) if step else (TOOL_SUMMARY, None)

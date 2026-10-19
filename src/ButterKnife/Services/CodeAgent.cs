@@ -106,6 +106,20 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
     /// </summary>
     public bool? SupportsImages { get; set; }
 
+    /// <summary>Tools from the session's MCP servers, offered beside the built-in ones (see McpHub).</summary>
+    public IReadOnlyList<McpTool> McpTools
+    {
+        get => _mcpTools;
+        init
+        {
+            _mcpTools = value;
+            _external = value.GroupBy(t => t.QualifiedName).ToDictionary(g => g.Key, g => g.First());
+        }
+    }
+
+    private readonly IReadOnlyList<McpTool> _mcpTools = [];
+    private readonly IReadOnlyDictionary<string, McpTool> _external = new Dictionary<string, McpTool>();
+
     /// <summary>The session's shell: run_command keeps its working directory and environment, and starts background commands in it.</summary>
     public CodeShell? Shell { get; set; }
 
@@ -137,7 +151,7 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
         for (var step = 0; step < MaxSteps; step++)
         {
             var readOnly = Mode == CodePermissionMode.Plan;
-            var tools = CodeTools.Definitions(readOnly);
+            var tools = CodeTools.Definitions(readOnly).Concat(_mcpTools.Select(t => t.Definition)).ToArray();
             var request = await PrepareRequestAsync(history, readOnly, tools, observer, cancellationToken);
 
             observer.OnStepStarted();
@@ -206,7 +220,7 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
 
             for (var i = 0; i < calls.Count; i++)
             {
-                var invocation = CodeTools.Prepare(calls[i], workspace, readOnly, Shell);
+                var invocation = CodeTools.Prepare(calls[i], workspace, readOnly, Shell, _external);
                 ToolResult result;
                 if (invocation.Error is not null)
                 {
@@ -224,7 +238,7 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
                         // Every call needs an answer before the model is asked anything again.
                         for (var j = i + 1; j < calls.Count; j++)
                         {
-                            await FinishAsync(CodeTools.Prepare(calls[j], workspace, readOnly, Shell), ToolResult.Fail("Not run: the user declined an earlier action."), history, observer);
+                            await FinishAsync(CodeTools.Prepare(calls[j], workspace, readOnly, Shell, _external), ToolResult.Fail("Not run: the user declined an earlier action."), history, observer);
                         }
                         return CodeTurnEnd.Denied;
                     }
@@ -307,7 +321,7 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
         {
             messages = messages.Select(m => m.WithImagesAsText()).ToList();
         }
-        return [new(ChatRole.System, CodePrompt.Compose(workspace, readOnly, Summary, Shell)), .. messages];
+        return [new(ChatRole.System, CodePrompt.Compose(workspace, readOnly, Summary, Shell, _mcpTools.Select(t => t.ServerName).Distinct().ToArray())), .. messages];
     }
 
     /// <summary>Whether a request is expected to pass the threshold: the larger of the character estimate and the last reported count plus what was added since.</summary>
@@ -345,8 +359,12 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
         _ when Mode == CodePermissionMode.Auto => false,
         ToolPermission.Edit => Mode != CodePermissionMode.AcceptEdits,
         ToolPermission.Command => !CodeTools.IsCoveredBy(invocation.Command ?? "", AllowedCommands),
+        ToolPermission.External => !AllowedCommands.Contains(ExternalKey(invocation)),
         _ => true,
     };
+
+    /// <summary>How "Always allow" remembers an MCP tool: its qualified name, kept apart from command prefixes.</summary>
+    private static string ExternalKey(ToolInvocation invocation) => "mcp:" + invocation.ExternalTool;
 
     /// <summary>"Always" for an edit switches the session to accepting edits; for a command it remembers its prefix.</summary>
     private void Remember(ToolInvocation invocation)
@@ -358,6 +376,10 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
         else if (invocation.Permission == ToolPermission.Command && invocation.Command is { } command)
         {
             AllowedCommands.Add(CodeTools.CommandPrefix(command));
+        }
+        else if (invocation.Permission == ToolPermission.External)
+        {
+            AllowedCommands.Add(ExternalKey(invocation));
         }
     }
 
@@ -443,7 +465,7 @@ public static class CodePrompt
 
     public const int MaxInstructionChars = 20_000;
 
-    public static string Compose(CodeWorkspace workspace, bool readOnly, string? summary = null, CodeShell? shell = null)
+    public static string Compose(CodeWorkspace workspace, bool readOnly, string? summary = null, CodeShell? shell = null, IReadOnlyList<string>? mcpServers = null)
     {
         var sb = new StringBuilder();
         sb.Append("""
@@ -497,6 +519,13 @@ public static class CodePrompt
         {
             sb.Append("\nThe project's own instructions (from ").Append(instructions.File).Append("), which take precedence over the guidance above:\n\n")
                 .Append(instructions.Text).Append('\n');
+        }
+
+        if (mcpServers is { Count: > 0 })
+        {
+            sb.Append("\nTools named server__tool come from MCP servers the user connected (")
+                .Append(string.Join(", ", mcpServers))
+                .Append("). They can act outside the project folder; use them when the task calls for what they do.\n");
         }
 
         if (CodeCommands.SkillsSection(CodeCommands.DiscoverSkills(workspace)) is { } skills)

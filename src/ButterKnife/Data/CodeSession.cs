@@ -31,7 +31,11 @@ public sealed record CodeSession(
     int SummaryThrough,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    IReadOnlyList<CodeEntry> Entries);
+    IReadOnlyList<CodeEntry> Entries)
+{
+    /// <summary>The MCP servers switched on in this session; null (the default) means every enabled server.</summary>
+    public IReadOnlyList<Guid>? McpServers { get; init; }
+}
 
 /// <summary>In-process signal that the Code session list changed, so the sidebar can refresh across circuits.</summary>
 public sealed class CodeSessionEvents

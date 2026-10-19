@@ -23,6 +23,10 @@ public static class ShellCommand
     /// <summary>Environment that belongs to ButterKnife itself and must not leak into the user's builds (ports, environment name, config overrides).</summary>
     private static readonly string[] StrippedPrefixes = ["ASPNETCORE_", "BUTTERKNIFE_", "DOTNET_WATCH", "DOTNET_STARTUP_HOOKS", "DOTNET_MODIFIABLE_ASSEMBLIES", "DOTNET_LAUNCH_PROFILE"];
 
+    /// <summary>True for a variable that belongs to ButterKnife itself (its port, environment name, config overrides) and must not leak into programs it starts.</summary>
+    public static bool IsButterKnifeVariable(string key) =>
+        key.Contains("__", StringComparison.Ordinal) || StrippedPrefixes.Any(p => key.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+
     public static string ShellName => OperatingSystem.IsWindows() ? "PowerShell" : Path.GetFileName(UnixShell());
 
     public static Task<ShellResult> RunAsync(
@@ -69,7 +73,7 @@ public static class ShellCommand
 
         foreach (var key in start.Environment.Keys.ToArray())
         {
-            if (key.Contains("__", StringComparison.Ordinal) || StrippedPrefixes.Any(p => key.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            if (IsButterKnifeVariable(key))
             {
                 start.Environment.Remove(key);
             }

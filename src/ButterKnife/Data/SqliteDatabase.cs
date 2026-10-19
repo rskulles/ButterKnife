@@ -278,6 +278,22 @@ public sealed class SqliteDatabase
                 );
 
                 CREATE INDEX IF NOT EXISTS ix_code_message_images_message ON code_message_images(message_id);
+
+                -- MCP servers the Code tab can use. environment and headers are Data-Protection-encrypted JSON.
+                CREATE TABLE IF NOT EXISTS mcp_servers (
+                    id                TEXT PRIMARY KEY,
+                    name              TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    transport         TEXT NOT NULL, -- Stdio | Http
+                    command           TEXT NULL,
+                    arguments         TEXT NOT NULL, -- JSON array
+                    environment       TEXT NULL,
+                    working_directory TEXT NULL,
+                    url               TEXT NULL,
+                    headers           TEXT NULL,
+                    enabled           INTEGER NOT NULL DEFAULT 1,
+                    created_at        TEXT NOT NULL,
+                    updated_at        TEXT NOT NULL
+                );
                 """, cancellationToken);
 
             // Databases created before these columns existed.
@@ -300,6 +316,7 @@ public sealed class SqliteDatabase
             await AddColumnIfMissingAsync(connection, "conversations", "user_id", "TEXT NULL", cancellationToken);
             await AddColumnIfMissingAsync(connection, "code_sessions", "summary", "TEXT NULL", cancellationToken);
             await AddColumnIfMissingAsync(connection, "code_messages", "display", "TEXT NULL", cancellationToken); // a slash command as typed
+            await AddColumnIfMissingAsync(connection, "code_sessions", "mcp_servers", "TEXT NULL", cancellationToken); // JSON ids switched on; NULL: all enabled
             await AddColumnIfMissingAsync(connection, "code_sessions", "summary_through", "INTEGER NULL", cancellationToken);
             await ExecAsync(connection, "CREATE INDEX IF NOT EXISTS ix_conversations_user ON conversations(user_id, pinned DESC, updated_at DESC);", cancellationToken);
             await EnsureSearchIndexAsync(connection, cancellationToken);

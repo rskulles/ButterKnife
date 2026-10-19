@@ -35,5 +35,8 @@ public interface ICodeSessionStore
     /// <summary>The compaction checkpoint: a summary of the first <paramref name="through"/> entries (null clears it).</summary>
     Task SetSummaryAsync(Guid id, string? summary, int? through, CancellationToken cancellationToken = default);
 
+    /// <summary>The MCP servers switched on for the session; null means every enabled server (the default).</summary>
+    Task SetMcpServersAsync(Guid id, IReadOnlyList<Guid>? serverIds, CancellationToken cancellationToken = default);
+
     Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
 }
