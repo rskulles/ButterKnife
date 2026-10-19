@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using ButterKnife.Data;
 using ButterKnife.Services;
 
@@ -74,6 +75,38 @@ public sealed class CodeAgentTests : IDisposable
         Assert.Single(observer.Asked); // the second edit went ahead without asking
         Assert.Equal(CodePermissionMode.AcceptEdits, agent.Mode);
         Assert.Equal("Status: shipped\n", File.ReadAllText(Path.Combine(_root, "notes.md")));
+    }
+
+    [Fact]
+    public async Task McpToolsAreOfferedRunAndAskUntilAlwaysAllowed()
+    {
+        var received = new List<string>();
+        var schema = JsonDocument.Parse("""{"type":"object","properties":{"text":{"type":"string"}}}""").RootElement;
+        var echo = new McpTool(Guid.NewGuid(), "stub", "echo", "stub__echo", "[stub] Repeat", new ToolDefinition("stub__echo", "[stub] Repeat", schema))
+        {
+            CallAsync = (args, _) =>
+            {
+                received.Add(args.GetProperty("text").GetString()!);
+                return Task.FromResult(new ToolResult("echoed", false));
+            },
+        };
+        var client = new ScriptedClient(
+            [new ToolCall("m1", "stub__echo", """{"text":"one"}""")],
+            [new ToolCall("m2", "stub__echo", """{"text":"two"}""")],
+            []);
+        var observer = new RecordingObserver(PermissionChoice.AllowAlways);
+        var agent = new CodeAgent(client, "m", _workspace) { Mode = CodePermissionMode.AcceptEdits, McpTools = [echo] };
+
+        await agent.RunAsync([new(ChatRole.User, "use the server")], observer, CancellationToken.None);
+
+        Assert.Contains(client.Options[0].Tools!, t => t.Name == "stub__echo");
+        Assert.Contains("MCP servers the user connected (stub)", client.Requests[0][0].Content);
+        var asked = Assert.Single(observer.Asked); // accepting edits does not cover MCP tools; "always" covers the rest
+        Assert.Equal((ToolPermission.External, "stub__echo", "plug"), (asked.Permission, asked.ExternalTool, asked.Icon));
+        Assert.Equal(["one", "two"], received);
+        Assert.Contains("mcp:stub__echo", agent.AllowedCommands);
+        var results = client.Requests[^1].Where(m => m.Role == ChatRole.Tool).ToList();
+        Assert.Equal(["echoed", "echoed"], results.Select(r => r.Content));
     }
 
     [Fact]

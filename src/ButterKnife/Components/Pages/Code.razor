@@ -20,6 +20,9 @@
 @inject CodeShellRegistry Shells
 @inject CodeRunRegistry Runs
 @inject DraftStore Drafts
+@inject McpHub Mcp
+@inject IMcpServerStore McpStore
+@inject McpServerEvents McpEvents
 
 <PageTitle>@(_title is null ? "Code · ButterKnife" : $"{_title} · Code · ButterKnife")</PageTitle>
 
@@ -74,6 +77,14 @@ else if (_allowed is true)
             <option value="@CodePermissionMode.Auto">Auto (never ask)</option>
         </select>
 
+        @if (_mcpServers.Count > 0)
+        {
+            <button type="button" class="btn btn-sm @(_showMcp ? "btn-secondary" : "btn-outline-secondary")" @onclick="ToggleMcpAsync"
+                    title="MCP servers this session may use" aria-expanded="@(_showMcp ? "true" : "false")">
+                <i class="bi bi-plug" aria-hidden="true"></i><span class="ms-1">@McpButtonLabel</span>
+            </button>
+        }
+
         <div class="ms-auto d-flex align-items-center gap-2">
             @if (_contextTokens is { } used)
             {
@@ -110,6 +121,11 @@ else if (_allowed is true)
             @Selected.Model runs with a @FormatTokens(small)-token window, which a coding session fills quickly.
             Set a larger <strong>context window</strong> on the connection under <a href="settings/connections">Settings → Connections</a> if the model and your hardware allow it.
         </div>
+    }
+
+    @if (_showMcp && _mcpServers.Count > 0)
+    {
+        @McpPanel
     }
 
     @if (_showPicker)
@@ -346,6 +362,13 @@ else if (_allowed is true)
     private int? _contextTokens;
     private readonly Dictionary<string, (bool? Tools, int? Window, bool? Images)> _modelInfo = [];
 
+    /// <summary>The enabled MCP servers, the session's choice of them (null: all enabled ones) and what each offers.</summary>
+    private List<McpServer> _mcpServers = [];
+    private IReadOnlyList<Guid>? _mcpSelection;
+    private readonly Dictionary<Guid, McpServerTools> _mcpInfo = [];
+    private bool _showMcp;
+    private bool _mcpChecking;
+
     /// <summary>Whether the selected model can see pictures; false turns attaching off and turns pictures into notes.</summary>
     private bool? _supportsImages;
 
@@ -421,6 +444,8 @@ else if (_allowed is true)
 
         ConnectionEvents.Changed += OnConnectionsChanged;
         Events.Changed += OnSessionsChanged;
+        McpEvents.Changed += OnMcpServersChanged;
+        await LoadMcpServersAsync();
         _ = InvokeAsync(async () =>
         {
             await RefreshModelsAsync();
@@ -454,6 +479,7 @@ else if (_allowed is true)
         {
             // A new session starts in the folder of the most recent one; the picker is a click away.
             _mode = CodePermissionMode.Ask;
+            _mcpSelection = null;
             _recent = await Store.RecentWorkspacesAsync(_userId, cancellationToken: _disposed.Token);
             SetWorkspace(_recent.FirstOrDefault(Directory.Exists));
             if (_workspace is null)
@@ -473,6 +499,7 @@ else if (_allowed is true)
 
         _title = session.Title;
         _mode = session.Mode;
+        _mcpSelection = session.McpServers;
         _contextTokens = session.ContextTokens;
         _contextWindow = session.ContextWindow;
         SetWorkspace(session.Workspace);
@@ -706,6 +733,103 @@ else if (_allowed is true)
         _ => "",
     };
 
+    // ---------------------------------------------------------------- MCP servers
+
+    private bool McpSelected(Guid id) => _mcpSelection?.Contains(id) ?? true;
+
+    private string McpButtonLabel
+    {
+        get
+        {
+            var count = _mcpServers.Count(s => McpSelected(s.Id));
+            return count == 0 ? "No MCP" : $"MCP {count}";
+        }
+    }
+
+    private async Task LoadMcpServersAsync()
+    {
+        try
+        {
+            _mcpServers = (await McpStore.ListAsync(_disposed.Token)).Where(s => s.Enabled).ToList();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _mcpServers = [];
+        }
+    }
+
+    private void OnMcpServersChanged() =>
+        _ = InvokeAsync(async () =>
+        {
+            _mcpInfo.Clear();
+            await LoadMcpServersAsync();
+            StateHasChanged();
+        });
+
+    /// <summary>Opening the panel starts the servers (as a turn would) so it can show what each offers and costs.</summary>
+    private async Task ToggleMcpAsync()
+    {
+        _showMcp = !_showMcp;
+        if (!_showMcp || _mcpChecking)
+        {
+            return;
+        }
+        var missing = _mcpServers.Where(s => !_mcpInfo.ContainsKey(s.Id)).Select(s => s.Id).ToList();
+        if (missing.Count == 0)
+        {
+            return;
+        }
+        _mcpChecking = true;
+        StateHasChanged();
+        try
+        {
+            foreach (var info in await Mcp.GetToolsAsync(missing, _disposed.Token))
+            {
+                _mcpInfo[info.Server.Id] = info;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        finally
+        {
+            _mcpChecking = false;
+        }
+    }
+
+    private async Task SetMcpSelectedAsync(Guid id, bool selected)
+    {
+        var chosen = _mcpServers.Where(s => s.Id == id ? selected : McpSelected(s.Id)).Select(s => s.Id).ToList();
+        // Everything enabled is stored as null, so a server added later is offered too.
+        _mcpSelection = chosen.Count == _mcpServers.Count ? null : chosen;
+        if (_sessionId is { } sessionId)
+        {
+            await SaveQuietlyAsync(() => Store.SetMcpServersAsync(sessionId, _mcpSelection, _disposed.Token));
+        }
+    }
+
+    /// <summary>The chosen servers' tools for a turn; a server that cannot start is reported and left out.</summary>
+    private async Task<IReadOnlyList<McpTool>> LoadMcpToolsAsync()
+    {
+        var ids = _mcpServers.Where(s => McpSelected(s.Id)).Select(s => s.Id).ToList();
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+        var servers = await Mcp.GetToolsAsync(ids, _disposed.Token);
+        foreach (var info in servers)
+        {
+            _mcpInfo[info.Server.Id] = info;
+        }
+        var failed = servers.Where(s => s.Error is not null).ToList();
+        if (failed.Count > 0)
+        {
+            _error = "Working without " + string.Join("; ", failed.Select(s => $"MCP server {s.Server.Name}: {s.Error}"));
+        }
+        return servers.SelectMany(s => s.Tools).ToList();
+    }
+
     private static string FolderName(string path) => Path.GetFileName(Path.TrimEndingDirectorySeparator(path)) is { Length: > 0 } name ? name : path;
 
     private static string FormatTokens(int tokens) => tokens >= 1000 ? $"{tokens / 1000.0:0.#}k" : tokens.ToString();
@@ -777,6 +901,42 @@ else if (_allowed is true)
         _showPicker = _workspace is null;
         _pickerError = _workspace is null ? $"{path} is not a folder on this computer." : null;
     }
+
+    private RenderFragment McpPanel => @<div class="border rounded p-2 bg-body-tertiary d-flex flex-column gap-1">
+        <div class="d-flex align-items-center gap-2">
+            <strong class="small flex-grow-1">MCP servers for this session</strong>
+            @if (_mcpChecking)
+            {
+                <span class="spinner-border spinner-border-sm text-body-secondary" role="status" aria-label="Starting servers"></span>
+            }
+            <button type="button" class="btn-close" style="font-size: 0.6rem" aria-label="Close" @onclick="() => _showMcp = false"></button>
+        </div>
+        @foreach (var server in _mcpServers)
+        {
+            var id = server.Id;
+            <div class="form-check small mb-0">
+                <input class="form-check-input" type="checkbox" id="mcp-@id" checked="@McpSelected(id)"
+                       @onchange="e => SetMcpSelectedAsync(id, e.Value is true)" />
+                <label class="form-check-label d-flex flex-wrap gap-2" for="mcp-@id">
+                    <span class="fw-semibold">@server.Name</span>
+                    @if (_mcpInfo.TryGetValue(id, out var info))
+                    {
+                        if (info.Error is { } error)
+                        {
+                            <span class="text-danger text-break">@error</span>
+                        }
+                        else
+                        {
+                            <span class="text-body-secondary" title="@string.Join(", ", info.Tools.Select(t => t.ToolName))">
+                                @info.Tools.Count @(info.Tools.Count == 1 ? "tool" : "tools"), ~@FormatTokens(info.EstimatedTokens) tokens per request
+                            </span>
+                        }
+                    }
+                </label>
+            </div>
+        }
+        <div class="small text-body-secondary">The model asks before using a server's tool. Servers are managed under <a href="settings/mcp">Settings → MCP servers</a>.</div>
+    </div>;
 
     private RenderFragment FolderPicker => @<div class="border rounded p-2 bg-body-tertiary d-flex flex-column gap-2">
         <div class="d-flex align-items-center gap-2">
@@ -1083,6 +1243,10 @@ else if (_allowed is true)
                 _sessionId = session.Id;
                 _title = session.Title;
                 _titlePending = true;
+                if (_mcpSelection is not null)
+                {
+                    await Store.SetMcpServersAsync(session.Id, _mcpSelection, _disposed.Token);
+                }
                 Drafts.Clear(_userId, "code:new"); // it was sent: the next new session starts empty
                 _draftKeyRestored = DraftKey;
                 Events.NotifyChanged();
@@ -1118,6 +1282,7 @@ else if (_allowed is true)
             AttachShell(shell);
             var history = CodeAgent.Repair(_history);
             _history = history.ToList(); // the page keeps its own copy, updated from the run's events
+            var mcpTools = await LoadMcpToolsAsync();
             var agent = new CodeAgent(client, model.Model, new CodeWorkspace(workspace))
             {
                 Mode = _mode,
@@ -1131,6 +1296,7 @@ else if (_allowed is true)
                 AllowedCommands = shell.AllowedCommands, // "always allow" lasts as long as the session's shell
                 Shell = shell,
                 SupportsImages = _supportsImages,
+                McpTools = mcpTools,
             };
             var run = Runs.Start(new CodeRunStart(_sessionId!.Value, _userId, promptMessageId, agent, history,
                 model.ConnectionId, model.Model, prompt, _titlePending, _contextWindow, _contextTokens));
@@ -1452,6 +1618,8 @@ else if (_allowed is true)
         item.Title = invocation.Title;
         item.Icon = invocation.Icon;
         item.Command = invocation.Command ?? item.Command;
+        item.ExternalTool = invocation.ExternalTool ?? item.ExternalTool;
+        item.Arguments = invocation.Arguments ?? item.Arguments;
         item.Diff = invocation.Diff ?? item.Diff;
         return item;
     }
@@ -1536,11 +1704,15 @@ else if (_allowed is true)
             <div class="border border-warning rounded p-2 bg-warning-subtle d-flex flex-column gap-2" role="alertdialog" aria-label="@item.Title">
                 <div class="d-flex align-items-center gap-2">
                     <i class="bi bi-@item.Icon" aria-hidden="true"></i>
-                    <span class="fw-semibold text-break">@(item.Command is not null ? "Run this command?" : $"{item.Title}?")</span>
+                    <span class="fw-semibold text-break">@(item.Command is not null ? "Run this command?" : item.ExternalTool is { } external && McpToolNames.TrySplit(external, out var server, out var tool) ? $"Use {tool} from {server}?" : $"{item.Title}?")</span>
                 </div>
                 @if (item.Command is { } command)
                 {
                     <pre class="code-output mb-0 p-2 rounded small">@command</pre>
+                }
+                else if (item.ExternalTool is not null)
+                {
+                    <pre class="code-output mb-0 p-2 rounded small">@item.Arguments</pre>
                 }
                 else if (item.Diff is { } diff)
                 {
@@ -1552,7 +1724,7 @@ else if (_allowed is true)
                         <i class="bi bi-check-lg me-1" aria-hidden="true"></i>Allow
                     </button>
                     <button type="button" class="btn btn-sm btn-secondary" @onclick="() => Answer(item, PermissionChoice.AllowAlways)">
-                        @(item.Command is { } c ? $"Always allow {CodeTools.CommandPrefix(c)}" : "Allow all edits this session")
+                        @(item.Command is { } c ? $"Always allow {CodeTools.CommandPrefix(c)}" : item.ExternalTool is { } qualified ? $"Always allow {qualified}" : "Allow all edits this session")
                     </button>
                     <button type="button" class="btn btn-sm btn-outline-danger ms-auto" @onclick="() => Answer(item, PermissionChoice.Deny)">
                         <i class="bi bi-x-lg me-1" aria-hidden="true"></i>Deny
@@ -1602,6 +1774,10 @@ else if (_allowed is true)
                     @if (item.Command is { } cmd)
                     {
                         <div class="font-monospace text-body-secondary text-break mb-1">$ @cmd</div>
+                    }
+                    @if (item.ExternalTool is not null && !string.IsNullOrWhiteSpace(item.Arguments) && item.Arguments != "{}")
+                    {
+                        <pre class="code-output mb-1 p-2 rounded small">@item.Arguments</pre>
                     }
                     @if (item.Diff is { IsEmpty: false } diff && item.State == ToolState.Done)
                     {
@@ -1682,6 +1858,7 @@ else if (_allowed is true)
         AttachShell(null);
         ConnectionEvents.Changed -= OnConnectionsChanged;
         Events.Changed -= OnSessionsChanged;
+        McpEvents.Changed -= OnMcpServersChanged;
         await _disposed.CancelAsync();
         if (_js is not null)
         {
@@ -1748,6 +1925,8 @@ else if (_allowed is true)
         public string Title { get; set; } = "";
         public string Icon { get; set; } = "tools";
         public string? Command { get; set; }
+        public string? ExternalTool { get; set; }
+        public string? Arguments { get; set; }
         public LineDiffResult? Diff { get; set; }
         public ToolState State { get; set; }
         public bool Denied { get; set; }

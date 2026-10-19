@@ -15,6 +15,9 @@ public enum ToolPermission
 
     /// <summary>Runs a command; anything is possible, so it always shows exactly what will run.</summary>
     Command,
+
+    /// <summary>A tool from an MCP server: it may act outside the project folder, so it shows the tool and its arguments.</summary>
+    External,
 }
 
 /// <summary>What a tool sends back: the text the model reads, whether it failed, and for edits the stored diff.</summary>
@@ -60,6 +63,11 @@ public sealed class ToolInvocation
 
     /// <summary>For run_command: the command line exactly as it will run.</summary>
     public string? Command { get; init; }
+
+    /// <summary>For an MCP tool: its qualified name (what "Always allow" remembers) and its arguments, indented for reading.</summary>
+    public string? ExternalTool { get; init; }
+
+    public string? Arguments { get; init; }
 
     /// <summary>The path a file tool works on, relative to the project folder.</summary>
     public string? Path { get; init; }
@@ -196,9 +204,10 @@ public static class CodeTools
     /// <summary>
     /// Checks a call's arguments and prepares it. Never throws for a bad call: the invocation carries the error instead.
     /// <paramref name="shell"/> is the session's shell; without one each command runs in a fresh shell in the project
-    /// folder and background commands are unavailable.
+    /// folder and background commands are unavailable. <paramref name="external"/> holds the session's MCP tools by
+    /// qualified name.
     /// </summary>
-    public static ToolInvocation Prepare(ToolCall call, CodeWorkspace workspace, bool readOnly = false, CodeShell? shell = null)
+    public static ToolInvocation Prepare(ToolCall call, CodeWorkspace workspace, bool readOnly = false, CodeShell? shell = null, IReadOnlyDictionary<string, McpTool>? external = null)
     {
         if (call.TryParseArguments() is not { } args)
         {
@@ -219,7 +228,8 @@ public static class CodeTools
                 CommandOutput => PrepareOutput(call, args, shell),
                 ReadSkill => PrepareSkill(call, args, workspace),
                 EditFile or WriteFile => ToolInvocation.Invalid(call, call.Name, "Plan mode is on: files cannot be changed. Describe the change instead."),
-                _ => ToolInvocation.Invalid(call, call.Name, $"There is no tool called {call.Name}. Available tools: {string.Join(", ", Definitions(readOnly).Select(t => t.Name))}."),
+                _ when external?.TryGetValue(call.Name, out var tool) == true => PrepareExternal(call, args, tool),
+                _ => ToolInvocation.Invalid(call, call.Name, $"There is no tool called {call.Name}. Available tools: {string.Join(", ", Definitions(readOnly).Select(t => t.Name).Concat(external?.Keys ?? []))}."),
             };
         }
         catch (CodeToolException ex)
@@ -248,6 +258,7 @@ public static class CodeTools
             RunCommand => ($"{(Arg("background") is "true" ? "Start" : "Run")} {Truncate((Arg("command") ?? "").ReplaceLineEndings(" "), 80)}", Arg("background") is "true" ? "play-circle" : "terminal", Arg("command")),
             ReadSkill => ($"Use skill {Arg("name")}", "journal-bookmark", null),
             CommandOutput => Arg("stop") is "true" ? ($"Stop {Arg("id")}", "stop-circle", null) : ($"Check {Arg("id")}", "terminal-split", null),
+            _ when McpToolNames.TrySplit(call.Name, out var server, out var tool) => ($"{server}: {tool}", "plug", null),
             _ => (call.Name, "exclamation-triangle", null),
         };
     }
@@ -562,6 +573,17 @@ public static class CodeTools
             })
         { Path = relative, Diff = diff };
     }
+
+    // ---------------------------------------------------------------- MCP tools
+
+    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
+
+    private static ToolInvocation PrepareExternal(ToolCall call, JsonElement args, McpTool tool) =>
+        new(call, $"{tool.ServerName}: {tool.ToolName}", "plug", ToolPermission.External, (_, ct) => tool.CallAsync(args, ct))
+        {
+            ExternalTool = tool.QualifiedName,
+            Arguments = JsonSerializer.Serialize(args, Indented),
+        };
 
     // ---------------------------------------------------------------- read_skill
 

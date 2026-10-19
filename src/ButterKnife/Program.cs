@@ -26,7 +26,9 @@ builder.Services.AddSingleton<CodeShellRegistry>();
 builder.Services.AddSingleton<CodeRunRegistry>();
 builder.Services.AddSingleton<ChatRunRegistry>();
 builder.Services.AddSingleton<DraftStore>(); // unsent messages, per user and chat/session, in memory
-builder.Services.AddScoped<ReturnLocation>(); // per browser connection: where Settings' back link goes
+builder.Services.AddScoped<ReturnLocation>();
+// Code tab: MCP servers, connected when a turn first needs them and stopped when the host shuts down.
+builder.Services.AddSingleton<McpHub>(); // per browser connection: where Settings' back link goes
 
 var app = builder.Build();
 

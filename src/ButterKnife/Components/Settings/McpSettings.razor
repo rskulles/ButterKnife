@@ -1,0 +1,537 @@
+@* MCP servers section: the list on the left (enable switch, test, edit, delete), an add/edit form on the right and,
+   below, an import box for the mcpServers JSON other clients use. Saving fires McpServerEvents, which restarts a
+   running server with its new settings (McpHub). Environment and headers are stored encrypted. *@
+@implements IDisposable
+@inject IMcpServerStore Store
+@inject McpServerEvents Events
+@inject McpHub Hub
+
+<h1 class="h4">MCP servers</h1>
+<p class="text-muted">
+    Model Context Protocol servers give the Code tab's model more tools: a browser, a database, an issue tracker, documentation search.
+    Each session chooses which servers it uses (the <i class="bi bi-plug" aria-hidden="true"></i> button in its header), and the model asks
+    before using any of their tools. Local servers run on this computer through your login shell, so <code>npx</code> and <code>uvx</code> work.
+</p>
+
+<div class="row g-4">
+    <div class="col-lg-6">
+        @if (_servers.Count == 0)
+        {
+            <p class="text-muted">No MCP servers yet. Add one on the right or import a configuration below.</p>
+        }
+        else
+        {
+            <div class="list-group">
+                @foreach (var s in _servers)
+                {
+                    var editing = s.Id == _editingId;
+                    <div class="list-group-item @(editing ? "active" : "")">
+                        <div class="d-flex align-items-start gap-2">
+                            <div class="form-check form-switch mb-0 pt-1">
+                                <input class="form-check-input" type="checkbox" role="switch" id="mcp-on-@s.Id" checked="@s.Enabled"
+                                       @onchange="e => SetEnabledAsync(s, e.Value is true)" disabled="@_busy" aria-label="Enable @s.Name" />
+                            </div>
+                            <div class="flex-grow-1" style="min-width: 0">
+                                <div class="fw-semibold">
+                                    @s.Name
+                                    <span class="badge @(editing ? "text-bg-light" : "text-bg-secondary") ms-1 fw-normal">@(s.Transport == McpTransportKind.Stdio ? "local" : "remote")</span>
+                                </div>
+                                <div class="small font-monospace text-truncate @(editing ? "" : "text-body-secondary")" title="@s.Summary">@s.Summary</div>
+                                @if (_results.TryGetValue(s.Id, out var result))
+                                {
+                                    @TestResult(result, editing)
+                                }
+                            </div>
+                            @if (_pendingDelete == s.Id)
+                            {
+                                <span class="d-flex align-items-center gap-1 small" role="alertdialog" aria-label="Delete this server?">
+                                    Delete?
+                                    <button type="button" class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(s.Id)" disabled="@_busy">Delete</button>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => _pendingDelete = null">Keep</button>
+                                </span>
+                            }
+                            else
+                            {
+                                var linkClass = $"btn btn-sm btn-link p-1 {(editing ? "text-white" : "text-body-secondary")}";
+                                <button type="button" class="@linkClass" title="Test: start it and list its tools" aria-label="Test @s.Name" @onclick="() => TestSavedAsync(s)" disabled="@(_busy || _testing.Contains(s.Id))">
+                                    @if (_testing.Contains(s.Id))
+                                    {
+                                        <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                                    }
+                                    else
+                                    {
+                                        <i class="bi bi-activity" aria-hidden="true"></i>
+                                    }
+                                </button>
+                                <button type="button" class="@linkClass" title="Edit" aria-label="Edit @s.Name" @onclick="() => BeginEdit(s)" disabled="@_busy">
+                                    <i class="bi bi-pencil" aria-hidden="true"></i>
+                                </button>
+                                <button type="button" class="@linkClass" title="Delete" aria-label="Delete @s.Name" @onclick="() => _pendingDelete = s.Id" disabled="@_busy">
+                                    <i class="bi bi-trash" aria-hidden="true"></i>
+                                </button>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        @if (_listMessage is not null)
+        {
+            <div class="small mt-2 @(_listOk ? "text-success" : "text-danger")" role="status">@_listMessage</div>
+        }
+
+        <div class="card mt-4">
+            <div class="card-body">
+                <h2 class="h6 card-title">Import from Claude or another client</h2>
+                <p class="small text-muted mb-2">
+                    Paste the <code>mcpServers</code> JSON from <code>claude_desktop_config.json</code>, a project's <code>.mcp.json</code>
+                    or similar. Servers whose name is already taken are skipped.
+                </p>
+                <textarea class="form-control form-control-sm font-monospace" rows="6" @bind="_import" @bind:event="oninput" disabled="@_busy"
+                          aria-label="Configuration to import"
+                          placeholder="@ImportPlaceholder"></textarea>
+                <div class="d-flex align-items-center gap-2 mt-2">
+                    <button type="button" class="btn btn-sm btn-outline-primary" @onclick="ImportAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_import))">
+                        <i class="bi bi-box-arrow-in-down me-1" aria-hidden="true"></i>Import
+                    </button>
+                </div>
+                @if (_importMessage is not null)
+                {
+                    <div class="small mt-2 @(_importOk ? "text-success" : "text-danger")" role="status" style="white-space: pre-line">@_importMessage</div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-body">
+                <h2 class="h6 card-title">@(_editingId is null ? "New MCP server" : $"Edit {_editingName}")</h2>
+
+                <div class="mb-2">
+                    <label class="form-label small mb-0" for="mcp-name">Name</label>
+                    <input id="mcp-name" class="form-control form-control-sm" @bind="_name" @bind:event="oninput" maxlength="@McpServer.MaxNameLength" disabled="@_busy"
+                           placeholder="github" />
+                    <div class="form-text">Letters, digits, - and _. The model sees the tools as <code>@(string.IsNullOrWhiteSpace(_name) ? "name" : _name.Trim())__tool</code>.</div>
+                </div>
+
+                <div class="mb-2">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Kind of server">
+                        <input type="radio" class="btn-check" name="mcp-transport" id="mcp-stdio" checked="@(_transport == McpTransportKind.Stdio)"
+                               @onchange="() => _transport = McpTransportKind.Stdio" disabled="@_busy" />
+                        <label class="btn btn-outline-secondary" for="mcp-stdio"><i class="bi bi-terminal me-1" aria-hidden="true"></i>Local program</label>
+                        <input type="radio" class="btn-check" name="mcp-transport" id="mcp-http" checked="@(_transport == McpTransportKind.Http)"
+                               @onchange="() => _transport = McpTransportKind.Http" disabled="@_busy" />
+                        <label class="btn btn-outline-secondary" for="mcp-http"><i class="bi bi-globe me-1" aria-hidden="true"></i>URL</label>
+                    </div>
+                </div>
+
+                @if (_transport == McpTransportKind.Stdio)
+                {
+                    <div class="mb-2">
+                        <label class="form-label small mb-0" for="mcp-command">Command</label>
+                        <input id="mcp-command" class="form-control form-control-sm font-monospace" @bind="_command" @bind:event="oninput" disabled="@_busy"
+                               placeholder="npx" />
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small mb-0" for="mcp-args">Arguments <span class="text-muted">(one per line)</span></label>
+                        <textarea id="mcp-args" class="form-control form-control-sm font-monospace" rows="3" @bind="_arguments" @bind:event="oninput" disabled="@_busy"
+                                  placeholder="@ArgumentsPlaceholder"></textarea>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small mb-0" for="mcp-env">Environment <span class="text-muted">(KEY=value per line; stored encrypted)</span></label>
+                        <textarea id="mcp-env" class="form-control form-control-sm font-monospace" rows="2" @bind="_environment" @bind:event="oninput" disabled="@_busy"
+                                  placeholder="GITHUB_TOKEN=…" spellcheck="false" autocomplete="off"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small mb-0" for="mcp-cwd">Working folder <span class="text-muted">(optional)</span></label>
+                        <input id="mcp-cwd" class="form-control form-control-sm font-monospace" @bind="_workingDirectory" @bind:event="oninput" disabled="@_busy"
+                               placeholder="your home folder" />
+                    </div>
+                }
+                else
+                {
+                    <div class="mb-2">
+                        <label class="form-label small mb-0" for="mcp-url">URL</label>
+                        <input id="mcp-url" class="form-control form-control-sm font-monospace" @bind="_url" @bind:event="oninput" disabled="@_busy"
+                               placeholder="http://192.168.1.20:8000/mcp" />
+                        <div class="form-text">Streamable HTTP, or the older SSE transport; ButterKnife tries both.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small mb-0" for="mcp-headers">Headers <span class="text-muted">(Name: value per line; stored encrypted)</span></label>
+                        <textarea id="mcp-headers" class="form-control form-control-sm font-monospace" rows="2" @bind="_headers" @bind:event="oninput" disabled="@_busy"
+                                  placeholder="Authorization: Bearer …" spellcheck="false" autocomplete="off"></textarea>
+                    </div>
+                }
+
+                @if (Problem is { } problem)
+                {
+                    <div class="small text-warning-emphasis mb-2">@problem</div>
+                }
+
+                <div class="d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-sm btn-primary" @onclick="SaveAsync" disabled="@(_busy || Problem is not null)">@(_editingId is null ? "Add" : "Save")</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="TestFormAsync" disabled="@(_busy || Problem is not null)"
+                            title="Start the server as entered and list its tools, without saving">
+                        @if (_testingForm)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                        }
+                        Test
+                    </button>
+                    @if (_editingId is not null)
+                    {
+                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="CancelEdit" disabled="@_busy">Cancel</button>
+                    }
+                </div>
+
+                @if (_formResult is not null)
+                {
+                    @TestResult(_formResult, false)
+                }
+                @if (_formMessage is not null)
+                {
+                    <div class="small mt-2 @(_formOk ? "text-success" : "text-danger")" role="status">@_formMessage</div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const string ArgumentsPlaceholder = "-y\n@modelcontextprotocol/server-filesystem\n/Users/me/Documents";
+
+    private const string ImportPlaceholder = """
+        {
+          "mcpServers": {
+            "filesystem": {
+              "command": "npx",
+              "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"]
+            }
+          }
+        }
+        """;
+
+    private IReadOnlyList<McpServer> _servers = [];
+    private Guid? _editingId;
+    private string _editingName = "";
+    private bool _editingEnabled = true;
+    private DateTimeOffset _editingCreated;
+    private string _name = "";
+    private McpTransportKind _transport = McpTransportKind.Stdio;
+    private string _command = "";
+    private string _arguments = "";
+    private string _environment = "";
+    private string _workingDirectory = "";
+    private string _url = "";
+    private string _headers = "";
+    private string _import = "";
+
+    private Guid? _pendingDelete;
+    private bool _busy;
+    private bool _testingForm;
+    private readonly HashSet<Guid> _testing = [];
+    private readonly Dictionary<Guid, McpServerTools> _results = [];
+    private McpServerTools? _formResult;
+    private string? _formMessage;
+    private bool _formOk;
+    private string? _listMessage;
+    private bool _listOk;
+    private string? _importMessage;
+    private bool _importOk;
+    private readonly CancellationTokenSource _disposed = new();
+
+    private string? Problem
+    {
+        get
+        {
+            var name = _name.Trim();
+            if (name.Length == 0)
+            {
+                return "Give the server a name.";
+            }
+            if (!McpServer.IsValidName(name))
+            {
+                return "Use only letters, digits, - and _ in the name (at most 32).";
+            }
+            if (_servers.Any(s => s.Id != _editingId && string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                return "Another server already has that name.";
+            }
+            if (_transport == McpTransportKind.Stdio)
+            {
+                return string.IsNullOrWhiteSpace(_command) ? "Enter the command that starts the server."
+                    : McpImport.ParsePairs(_environment, '=', out var envProblem) is null ? envProblem
+                    : null;
+            }
+            return !Uri.TryCreate(_url.Trim(), UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https") ? "Enter the server's http:// or https:// URL."
+                : McpImport.ParsePairs(_headers, ':', out var headerProblem) is null ? headerProblem
+                : null;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Events.Changed += OnChanged;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync() => _servers = await Store.ListAsync();
+
+    private void OnChanged() => _ = InvokeAsync(async () =>
+    {
+        await LoadAsync();
+        StateHasChanged();
+    });
+
+    private static RenderFragment TestResult(McpServerTools result, bool onActive) =>
+        @<div class="small mt-1">
+            @if (result.Error is { } error)
+            {
+                <div class="@(onActive ? "" : "text-danger") text-break" style="white-space: pre-line"><i class="bi bi-x-circle me-1" aria-hidden="true"></i>@error</div>
+            }
+            else
+            {
+                <div class="@(onActive ? "" : "text-success")">
+                    <i class="bi bi-check-circle me-1" aria-hidden="true"></i>@result.Tools.Count @(result.Tools.Count == 1 ? "tool" : "tools"), about @result.EstimatedTokens tokens per request
+                </div>
+                @if (result.Tools.Count > 0)
+                {
+                    <div class="@(onActive ? "" : "text-body-secondary") font-monospace text-break">@string.Join(", ", result.Tools.Select(t => t.ToolName))</div>
+                }
+            }
+        </div>;
+
+    /// <summary>The server as the form describes it (the id and timestamps are the edited one's, or empty for a new one).</summary>
+    private McpServer FromForm()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var stdio = _transport == McpTransportKind.Stdio;
+        return new McpServer(
+            _editingId ?? Guid.Empty,
+            _name.Trim(),
+            _transport,
+            stdio ? _command.Trim() : null,
+            stdio ? McpImport.ParseLines(_arguments).Select(a => a.Trim()).ToList() : [],
+            stdio ? McpImport.ParsePairs(_environment, '=', out _) ?? [] : new Dictionary<string, string>(),
+            stdio && !string.IsNullOrWhiteSpace(_workingDirectory) ? _workingDirectory.Trim() : null,
+            stdio ? null : _url.Trim(),
+            stdio ? new Dictionary<string, string>() : McpImport.ParsePairs(_headers, ':', out _) ?? [],
+            _editingId is null || _editingEnabled,
+            _editingId is null ? now : _editingCreated,
+            now);
+    }
+
+    private void BeginEdit(McpServer s)
+    {
+        _editingId = s.Id;
+        _editingName = s.Name;
+        _editingEnabled = s.Enabled;
+        _editingCreated = s.CreatedAt;
+        _name = s.Name;
+        _transport = s.Transport;
+        _command = s.Command ?? "";
+        _arguments = string.Join('\n', s.Arguments);
+        _environment = McpImport.FormatPairs(s.Environment, '=');
+        _workingDirectory = s.WorkingDirectory ?? "";
+        _url = s.Url ?? "";
+        _headers = McpImport.FormatPairs(s.Headers, ':');
+        _pendingDelete = null;
+        _formMessage = null;
+        _formResult = null;
+    }
+
+    private void CancelEdit()
+    {
+        _editingId = null;
+        _editingName = "";
+        _editingEnabled = true;
+        _name = _command = _arguments = _environment = _workingDirectory = _url = _headers = "";
+        _transport = McpTransportKind.Stdio;
+        _formMessage = null;
+        _formResult = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (Problem is not null || _busy)
+        {
+            return;
+        }
+        _busy = true;
+        _formMessage = null;
+        try
+        {
+            var saved = await Store.SaveAsync(FromForm());
+            var added = _editingId is null;
+            CancelEdit();
+            _formOk = true;
+            _formMessage = added ? $"Added {saved.Name}. Sessions that use every server get it on their next prompt." : $"Saved {saved.Name}. It restarts with the new settings.";
+            _results.Remove(saved.Id);
+            await LoadAsync();
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _formOk = false;
+            _formMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task TestFormAsync()
+    {
+        if (Problem is not null)
+        {
+            return;
+        }
+        _testingForm = true;
+        _busy = true;
+        _formResult = null;
+        _formMessage = null;
+        try
+        {
+            _formResult = await Hub.TestAsync(FromForm(), _disposed.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        finally
+        {
+            _testingForm = false;
+            _busy = false;
+        }
+    }
+
+    private async Task TestSavedAsync(McpServer server)
+    {
+        _testing.Add(server.Id);
+        _results.Remove(server.Id);
+        try
+        {
+            _results[server.Id] = await Hub.TestAsync(server, _disposed.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        finally
+        {
+            _testing.Remove(server.Id);
+        }
+    }
+
+    private async Task SetEnabledAsync(McpServer server, bool enabled)
+    {
+        _busy = true;
+        _listMessage = null;
+        try
+        {
+            await Store.SaveAsync(server with { Enabled = enabled, UpdatedAt = DateTimeOffset.UtcNow });
+            if (_editingId == server.Id)
+            {
+                _editingEnabled = enabled;
+            }
+            await LoadAsync();
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _listOk = false;
+            _listMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        _busy = true;
+        _listMessage = null;
+        try
+        {
+            var name = _servers.FirstOrDefault(s => s.Id == id)?.Name ?? "server";
+            await Store.DeleteAsync(id);
+            if (_editingId == id)
+            {
+                CancelEdit();
+            }
+            _pendingDelete = null;
+            _results.Remove(id);
+            await LoadAsync();
+            _listOk = true;
+            _listMessage = $"Deleted {name}.";
+            Events.NotifyChanged();
+        }
+        catch (Exception ex)
+        {
+            _listOk = false;
+            _listMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ImportAsync()
+    {
+        _busy = true;
+        _importMessage = null;
+        try
+        {
+            var parsed = McpImport.Parse(_import);
+            var lines = new List<string>(parsed.Problems);
+            var added = new List<string>();
+            foreach (var server in parsed.Servers)
+            {
+                if (_servers.Any(s => string.Equals(s.Name, server.Name, StringComparison.OrdinalIgnoreCase)) ||
+                    added.Contains(server.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    lines.Add($"{server.Name}: skipped, a server with that name exists.");
+                    continue;
+                }
+                try
+                {
+                    await Store.SaveAsync(server);
+                    added.Add(server.Name);
+                }
+                catch (ArgumentException ex)
+                {
+                    lines.Add($"{server.Name}: {ex.Message}");
+                }
+            }
+            if (added.Count > 0)
+            {
+                lines.Insert(0, $"Imported {string.Join(", ", added)}.");
+                _import = "";
+                await LoadAsync();
+                Events.NotifyChanged();
+            }
+            _importOk = added.Count > 0;
+            _importMessage = string.Join('\n', lines);
+        }
+        catch (Exception ex)
+        {
+            _importOk = false;
+            _importMessage = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        Events.Changed -= OnChanged;
+        _disposed.Cancel();
+        _disposed.Dispose();
+    }
+}

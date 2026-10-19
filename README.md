@@ -118,6 +118,10 @@ until the job is done.
 - **Bring your own.** Commands and skills are Markdown files in a `.claude/` or `.butterknife/` folder, in the project
   or in your home folder for every project. It's the same layout Claude Code uses, so ones you already have just work.
   A skill of yours with a built-in's name replaces the built-in.
+- **MCP servers.** Give the model more tools (a browser, a database, your issue tracker, documentation search) by
+  adding MCP servers under **Settings → MCP servers**, either programs on this computer or servers at a URL. Already
+  set them up for Claude Desktop or Claude Code? Paste that configuration and they're imported. Each session picks the
+  servers it uses and shows what they cost in context, and the model asks before using any of their tools.
 - **Long jobs fit.** When a session nears the model's memory limit, ButterKnife summarises the earlier work and keeps
   going, even in the middle of one long task.
 - **Pick a capable model.** Code needs a model that can call tools, such as Qwen, Llama 3.1 or later, or Mistral, and
