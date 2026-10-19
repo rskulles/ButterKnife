@@ -70,8 +70,10 @@ public sealed class ToolInvocation
 
 /// <summary>
 /// The Code tab's tools. Kept few so the schemas cost a small local model little context: read_file, list_files,
-/// grep and read_skill (read-only, never asked), edit_file and write_file (file changes) and run_command (anything).
-/// File tools stay inside the workspace folder; read_skill reads any listed skill wherever it lives. Output is capped so one call cannot flood a small context window.
+/// grep, read_skill and command_output (never asked), edit_file and write_file (file changes) and run_command
+/// (anything; it runs in the session's <see cref="CodeShell"/>, so the working directory and exported variables carry
+/// over, and can start background commands). File tools stay inside the workspace folder; read_skill reads any listed
+/// skill wherever it lives. Output is capped so one call cannot flood a small context window.
 /// </summary>
 public static class CodeTools
 {
@@ -82,6 +84,12 @@ public static class CodeTools
     public const string WriteFile = "write_file";
     public const string RunCommand = "run_command";
     public const string ReadSkill = "read_skill";
+    public const string CommandOutput = "command_output";
+
+    /// <summary>How long a background start waits for first output, so the model sees at once whether it came up.</summary>
+    public static readonly TimeSpan BackgroundFirstOutput = TimeSpan.FromSeconds(3);
+
+    public const int MaxOutputWaitSeconds = 60;
 
     public const int DefaultReadLines = 1000;
     public const int MaxLineChars = 2000;
@@ -147,12 +155,22 @@ public static class CodeTools
             },"required":["name"]}
             """),
         ToolDefinition.Create(RunCommand,
-            "Run a shell command in the project folder and return its output and exit code. Use it to build, run tests, use git and other command-line tools. Commands cannot read input; avoid interactive programs and long-running servers.",
+            "Run a shell command and return its output and exit code. Use it to build, run tests, use git and other command-line tools. Like a terminal, the working directory and exported variables carry over to the next command. Commands cannot read input, so avoid interactive programs. For servers, watchers and anything that keeps running, set background to true and read its output later with command_output.",
             """
             {"type":"object","properties":{
               "command":{"type":"string","description":"The command line to run"},
-              "timeout_seconds":{"type":"integer","description":"Stop the command after this many seconds (default 120, at most 600)"}
+              "timeout_seconds":{"type":"integer","description":"Stop the command after this many seconds (default 120, at most 600); ignored for background commands"},
+              "background":{"type":"boolean","description":"Start it and return at once with an id (default false)"}
             },"required":["command"]}
+            """),
+        ToolDefinition.Create(CommandOutput,
+            "Read what a background command (started by run_command with background true) has printed since the last read, and whether it is still running. Set stop to true to stop it.",
+            """
+            {"type":"object","properties":{
+              "id":{"type":"string","description":"The background command's id, such as bg1"},
+              "wait_seconds":{"type":"integer","description":"If nothing new has been printed yet, wait up to this long for output (default 0, at most 60)"},
+              "stop":{"type":"boolean","description":"Stop the command (default false)"}
+            },"required":["id"]}
             """),
     ];
 
@@ -160,8 +178,12 @@ public static class CodeTools
     public static IReadOnlyList<ToolDefinition> Definitions(bool readOnly) =>
         readOnly ? All.Where(t => t.Name is not (EditFile or WriteFile)).ToArray() : All;
 
-    /// <summary>Checks a call's arguments and prepares it. Never throws for a bad call: the invocation carries the error instead.</summary>
-    public static ToolInvocation Prepare(ToolCall call, CodeWorkspace workspace, bool readOnly = false)
+    /// <summary>
+    /// Checks a call's arguments and prepares it. Never throws for a bad call: the invocation carries the error instead.
+    /// <paramref name="shell"/> is the session's shell; without one each command runs in a fresh shell in the project
+    /// folder and background commands are unavailable.
+    /// </summary>
+    public static ToolInvocation Prepare(ToolCall call, CodeWorkspace workspace, bool readOnly = false, CodeShell? shell = null)
     {
         if (call.TryParseArguments() is not { } args)
         {
@@ -178,7 +200,8 @@ public static class CodeTools
                 Grep => PrepareGrep(call, args, workspace),
                 EditFile when !readOnly => PrepareEdit(call, args, workspace),
                 WriteFile when !readOnly => PrepareWrite(call, args, workspace),
-                RunCommand => PrepareCommand(call, args, workspace),
+                RunCommand => PrepareCommand(call, args, workspace, shell),
+                CommandOutput => PrepareOutput(call, args, shell),
                 ReadSkill => PrepareSkill(call, args, workspace),
                 EditFile or WriteFile => ToolInvocation.Invalid(call, call.Name, "Plan mode is on: files cannot be changed. Describe the change instead."),
                 _ => ToolInvocation.Invalid(call, call.Name, $"There is no tool called {call.Name}. Available tools: {string.Join(", ", Definitions(readOnly).Select(t => t.Name))}."),
@@ -207,8 +230,9 @@ public static class CodeTools
             Grep => ($"Search for {Truncate(Arg("pattern") ?? "", 60)}{(path == "." ? "" : $" in {path}")}", "search", null),
             EditFile => ($"Edit {path}", "pencil-square", null),
             WriteFile => ($"Write {path}", "file-earmark-diff", null),
-            RunCommand => ($"Run {Truncate((Arg("command") ?? "").ReplaceLineEndings(" "), 80)}", "terminal", Arg("command")),
+            RunCommand => ($"{(Arg("background") is "true" ? "Start" : "Run")} {Truncate((Arg("command") ?? "").ReplaceLineEndings(" "), 80)}", Arg("background") is "true" ? "play-circle" : "terminal", Arg("command")),
             ReadSkill => ($"Use skill {Arg("name")}", "journal-bookmark", null),
+            CommandOutput => Arg("stop") is "true" ? ($"Stop {Arg("id")}", "stop-circle", null) : ($"Check {Arg("id")}", "terminal-split", null),
             _ => (call.Name, "exclamation-triangle", null),
         };
     }
@@ -534,26 +558,88 @@ public static class CodeTools
 
     // ---------------------------------------------------------------- run_command
 
-    private static ToolInvocation PrepareCommand(ToolCall call, JsonElement args, CodeWorkspace workspace)
+    private static ToolInvocation PrepareCommand(ToolCall call, JsonElement args, CodeWorkspace workspace, CodeShell? shell)
     {
         var command = RequireString(args, "command").Trim();
         var seconds = Math.Clamp(GetInt(args, "timeout_seconds") ?? DefaultCommandSeconds, 1, MaxCommandSeconds);
-        return new ToolInvocation(call, $"Run {Truncate(command.ReplaceLineEndings(" "), 80)}", "terminal", ToolPermission.Command,
+        var title = Truncate(command.ReplaceLineEndings(" "), 80);
+
+        if (GetBool(args, "background") == true)
+        {
+            if (shell is null)
+            {
+                throw new CodeToolException("Background commands are not available here; run the command without background.");
+            }
+            return new ToolInvocation(call, $"Start {title}", "play-circle", ToolPermission.Command,
+                async (_, ct) =>
+                {
+                    var background = shell.Start(command);
+                    await background.WaitForExitAsync(BackgroundFirstOutput, ct);
+                    var first = await background.ReadNewAsync(TimeSpan.Zero, ct);
+                    var shown = first.Length == 0 ? "(no output yet)\n" : ShellCommand.Clip(first, ShellCommand.MaxOutputChars).Text;
+                    return background.IsRunning
+                        ? new ToolResult($"Started {background.Id} in {(background.Directory == "." ? "the project folder" : background.Directory)}. It is running; read more with command_output id {background.Id}, and stop it when done.\nFirst output:\n{shown}", false)
+                        : new ToolResult($"{background.Id} {background.Status} straight away.\n{shown}", background.ExitCode != 0);
+                })
+            { Command = command };
+        }
+
+        return new ToolInvocation(call, $"Run {title}", "terminal", ToolPermission.Command,
             async (onOutput, ct) =>
             {
-                var result = await ShellCommand.RunAsync(command, workspace.Root, TimeSpan.FromSeconds(seconds), onOutput, ct);
+                ShellResult result;
+                string? movedTo = null;
+                if (shell is null)
+                {
+                    result = await ShellCommand.RunAsync(command, workspace.Root, TimeSpan.FromSeconds(seconds), onOutput, ct);
+                }
+                else
+                {
+                    var before = shell.WorkingDirectory;
+                    result = await shell.RunAsync(command, TimeSpan.FromSeconds(seconds), onOutput, ct);
+                    movedTo = shell.WorkingDirectory != before ? shell.DisplayDirectory : null;
+                }
                 var text = result.Output.Length == 0 ? "(no output)\n" : result.Output;
                 if (result.TimedOut)
                 {
-                    return new ToolResult($"{text}\n[Stopped after {seconds} seconds without finishing.]", true);
+                    return new ToolResult($"{text}\n[Stopped after {seconds} seconds without finishing. For servers and watchers use background: true.]", true);
                 }
                 if (result.Cancelled)
                 {
                     return new ToolResult($"{text}\n[Stopped by the user.]", true);
                 }
-                return new ToolResult($"{text}\n[exit code {result.ExitCode}]", result.ExitCode != 0);
+                var where = movedTo is null ? "" : $"\n[working directory is now {movedTo}]";
+                return new ToolResult($"{text}\n[exit code {result.ExitCode}]{where}", result.ExitCode != 0);
             })
         { Command = command };
+    }
+
+    // ---------------------------------------------------------------- command_output
+
+    private static ToolInvocation PrepareOutput(ToolCall call, JsonElement args, CodeShell? shell)
+    {
+        var id = RequireString(args, "id").Trim();
+        var stop = GetBool(args, "stop") == true;
+        var wait = TimeSpan.FromSeconds(Math.Clamp(GetInt(args, "wait_seconds") ?? 0, 0, MaxOutputWaitSeconds));
+        if (shell?.Find(id) is not { } background)
+        {
+            var known = shell?.Background.Select(b => $"{b.Id} ({b.Status})").ToArray() ?? [];
+            throw new CodeToolException(known.Length == 0
+                ? $"There is no background command {id}; none have been started in this session."
+                : $"There is no background command {id}. Known: {string.Join(", ", known)}.");
+        }
+
+        return new ToolInvocation(call, stop ? $"Stop {background.Id}" : $"Check {background.Id}", stop ? "stop-circle" : "terminal-split", ToolPermission.None,
+            async (_, ct) =>
+            {
+                if (stop)
+                {
+                    background.Stop();
+                }
+                var output = await background.ReadNewAsync(stop ? TimeSpan.Zero : wait, ct);
+                var shown = output.Length == 0 ? "(nothing new)\n" : ShellCommand.Clip(output, ShellCommand.MaxOutputChars).Text;
+                return new ToolResult($"{shown}\n[{background.Id}: {background.Command} — {background.Status}]", false);
+            });
     }
 
     /// <summary>The first word or two of a command ("git status", "dotnet build"): what "always allow" remembers.</summary>

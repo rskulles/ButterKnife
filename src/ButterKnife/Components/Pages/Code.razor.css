@@ -101,3 +101,13 @@
     max-height: 18rem;
     overflow-y: auto;
 }
+
+/* Background commands: a quiet strip above the composer that unfolds into the latest output. */
+.code-background summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.code-background summary::-webkit-details-marker {
+    display: none;
+}

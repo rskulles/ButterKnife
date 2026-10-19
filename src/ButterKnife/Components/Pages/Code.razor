@@ -17,6 +17,7 @@
 @inject NavigationManager Nav
 @inject IJSRuntime Js
 @inject IOptions<LlmOptions> LlmOptions
+@inject CodeShellRegistry Shells
 
 <PageTitle>@(_title is null ? "Code · ButterKnife" : $"{_title} · Code · ButterKnife")</PageTitle>
 
@@ -202,6 +203,36 @@ else if (_allowed is true)
         }
     </div>
 
+    @if (_shell?.Background is { Count: > 0 } background)
+    {
+        @* Commands the model started with background: true. They outlive turns and page reloads; Stop kills one. *@
+        <div class="d-flex flex-column gap-1">
+            @foreach (var command in background)
+            {
+                <details class="code-background small border rounded px-2 py-1 bg-body-tertiary">
+                    <summary class="d-flex align-items-center gap-2">
+                        @if (command.IsRunning)
+                        {
+                            <span class="spinner-grow spinner-grow-sm text-success" aria-hidden="true"></span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-stop-circle text-body-secondary" aria-hidden="true"></i>
+                        }
+                        <span class="font-monospace text-body-secondary">@command.Id</span>
+                        <span class="font-monospace text-truncate" title="@command.Command">@command.Command</span>
+                        <span class="text-body-secondary text-nowrap">@command.Status</span>
+                        <button type="button" class="btn btn-sm btn-link py-0 ms-auto text-nowrap @(command.IsRunning ? "text-danger" : "text-body-secondary")"
+                                @onclick="() => StopBackground(command)" @onclick:preventDefault>
+                            @(command.IsRunning ? "Stop" : "Dismiss")
+                        </button>
+                    </summary>
+                    <pre class="code-output mb-1 mt-1 p-2 rounded">@(command.Tail(8000) is { Length: > 0 } tail ? tail : "(no output yet)")</pre>
+                </details>
+            }
+        </div>
+    }
+
     @if (_error is not null)
     {
         <div class="alert alert-danger py-1 px-2 small mb-0 d-flex align-items-center gap-2" role="alert">
@@ -373,6 +404,7 @@ else if (_allowed is true)
         _titlePending = false;
         _allowedCommands.Clear();
         _showPicker = false;
+        AttachShell(Id is { } shellId ? Shells.Find(shellId) : null);
 
         if (Id is not { } id)
         {
@@ -885,6 +917,7 @@ else if (_allowed is true)
                 LastUsage = _contextTokens is { } tokens ? (tokens, _history.Count - 1) : null,
             };
             _agent.AllowedCommands.UnionWith(_allowedCommands);
+            _agent.Shell = AttachShell(Shells.Get(_sessionId!.Value, workspace));
             end = await _agent.RunAsync(_history, this, token);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -1398,8 +1431,55 @@ else if (_allowed is true)
         }
     </div>;
 
+    // ---------------------------------------------------------------- the session's shell and background commands
+    /// <summary>This session's shell (see CodeShellRegistry), once a turn has created it; the page shows its background commands.</summary>
+    private CodeShell? _shell;
+    private long _lastShellRender;
+
+    private CodeShell? AttachShell(CodeShell? shell)
+    {
+        if (!ReferenceEquals(shell, _shell))
+        {
+            if (_shell is not null)
+            {
+                _shell.Changed -= OnShellChanged;
+            }
+            _shell = shell;
+            if (_shell is not null)
+            {
+                _shell.Changed += OnShellChanged;
+            }
+        }
+        return shell;
+    }
+
+    /// <summary>Background output can arrive fast; the strip re-renders at most twice a second, plus on every start and exit.</summary>
+    private void OnShellChanged()
+    {
+        var now = Stopwatch.GetTimestamp();
+        if (Stopwatch.GetElapsedTime(_lastShellRender, now) < TimeSpan.FromMilliseconds(500) && _shell?.Background.All(b => b.IsRunning) == true)
+        {
+            return;
+        }
+        _lastShellRender = now;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void StopBackground(BackgroundCommand command)
+    {
+        if (command.IsRunning)
+        {
+            command.Stop();
+        }
+        else
+        {
+            _shell?.Remove(command.Id);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
+        AttachShell(null);
         ConnectionEvents.Changed -= OnConnectionsChanged;
         await _disposed.CancelAsync();
         if (_js is not null)

@@ -25,12 +25,19 @@ public static class ShellCommand
 
     public static string ShellName => OperatingSystem.IsWindows() ? "PowerShell" : Path.GetFileName(UnixShell());
 
-    public static async Task<ShellResult> RunAsync(
+    public static Task<ShellResult> RunAsync(
         string command,
         string workingDirectory,
         TimeSpan timeout,
         Action<string>? onOutput,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        RunAsync(CreateStartInfo(command, workingDirectory), timeout, onOutput, cancellationToken);
+
+    /// <summary>
+    /// The process for one script: the login shell (or PowerShell) with ButterKnife's own environment removed and plain,
+    /// pager-free output. <paramref name="environment"/> is added on top (CodeShell passes its state file paths that way).
+    /// </summary>
+    public static ProcessStartInfo CreateStartInfo(string script, string workingDirectory, IReadOnlyDictionary<string, string>? environment = null)
     {
         var start = new ProcessStartInfo
         {
@@ -50,14 +57,14 @@ public static class ShellCommand
             start.ArgumentList.Add("-NoProfile");
             start.ArgumentList.Add("-NonInteractive");
             start.ArgumentList.Add("-Command");
-            start.ArgumentList.Add(command);
+            start.ArgumentList.Add(script);
         }
         else
         {
             start.FileName = UnixShell();
             start.ArgumentList.Add("-l");
             start.ArgumentList.Add("-c");
-            start.ArgumentList.Add(command);
+            start.ArgumentList.Add(script);
         }
 
         foreach (var key in start.Environment.Keys.ToArray())
@@ -72,7 +79,16 @@ public static class ShellCommand
         start.Environment["GIT_PAGER"] = "cat";
         start.Environment["TERM"] = "dumb";
         start.Environment["NO_COLOR"] = "1";
+        foreach (var (key, value) in environment ?? new Dictionary<string, string>())
+        {
+            start.Environment[key] = value;
+        }
+        return start;
+    }
 
+    /// <summary>Runs a prepared process to the end (or the timeout / cancel, which kill its whole tree) and collects its output.</summary>
+    public static async Task<ShellResult> RunAsync(ProcessStartInfo start, TimeSpan timeout, Action<string>? onOutput, CancellationToken cancellationToken)
+    {
         var output = new StringBuilder();
         var dropped = 0;
         var gate = new object();
@@ -154,10 +170,14 @@ public static class ShellCommand
         return ($"{text[..half]}\n\n[... {text.Length - 2 * half:N0} characters cut ...]\n\n{text[^half..]}", true);
     }
 
-    private static string UnixShell()
+    /// <summary>
+    /// The user's login shell when it speaks POSIX sh (zsh, bash, sh, dash, ksh): CodeShell's state-saving wrapper is
+    /// written in that dialect. fish and friends fall back to zsh on a Mac, bash elsewhere.
+    /// </summary>
+    public static string UnixShell()
     {
         var shell = Environment.GetEnvironmentVariable("SHELL");
-        return !string.IsNullOrEmpty(shell) && File.Exists(shell) ? shell
+        return !string.IsNullOrEmpty(shell) && File.Exists(shell) && Path.GetFileName(shell) is "zsh" or "bash" or "sh" or "dash" or "ksh" ? shell
             : File.Exists("/bin/zsh") && OperatingSystem.IsMacOS() ? "/bin/zsh"
             : "/bin/bash";
     }

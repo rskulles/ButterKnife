@@ -13,7 +13,8 @@ Speaks enough of each protocol for the app to list models, stream a canned markd
 When a chat request offers tools (the Code tab), the reply walks through a fixed scenario instead, one tool call per
 request in each protocol's own streaming shape: list_files, read_file README.md, write_file stub-notes.md, edit_file
 on it, run_command "ls -la", then a closing summary. A prompt containing "[quick]" skips straight to the summary;
-one containing "[skill]" starts with read_skill explore-project.
+one containing "[skill]" starts with read_skill explore-project; one containing "[bg]" instead starts a background
+command, reads its output with command_output, then cds into src and runs pwd twice to show the directory sticking.
 fake-llama:8b and fake-gpt report tool support; fake-tiny:1b does not.
 
 Run it, then add connections in the app pointing at http://127.0.0.1:<port> (Ollama / whisper.cpp)
@@ -246,7 +247,15 @@ class H(BaseHTTPRequestHandler):
     def tool_reply(self, body):
         prompt, called = tool_progress(body)
         steps = ([("This matches a skill; let me read it.", "read_skill", {"name": "explore-project"})] if "[skill]" in prompt else []) + TOOL_STEPS
-        step = None if "[quick]" in prompt else next((t for t in steps if t[1] not in called), None)
+        if "[bg]" in prompt:
+            steps = [
+                ("Let me start the server in the background.", "run_command", {"command": "for i in 1 2 3 4 5 6; do echo \"tick $i\"; sleep 1; done; echo finished", "background": True}),
+                ("Let me see what it printed since.", "command_output", {"id": "bg1", "wait_seconds": 3}),
+                ("Now move into src and check where I am.", "run_command", {"command": "mkdir -p src && cd src && pwd"}),
+                ("The directory should have stuck.", "run_command", {"command": "pwd"}),
+            ]
+        # One call per request, in order: the number of calls made since the prompt says which step is next.
+        step = None if "[quick]" in prompt or len(called) >= len(steps) else steps[len(called)]
         text, call = (step[0], (step[1], step[2])) if step else (TOOL_SUMMARY, None)
         words = [f"_{body.get('model')}_ "] + re.findall(r"\S+\s*|\s+", text) if not called else re.findall(r"\S+\s*|\s+", text)
         print("  tools offered: %s; called so far: %s -> %s" % ([t.get("name") or (t.get("function") or {}).get("name") for t in body["tools"]], called, call[0] if call else "summary"), flush=True)

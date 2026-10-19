@@ -99,6 +99,9 @@ until the job is done.
   until you allow it. Allow one thing, allow everything like it for the rest of the session, or say no and tell the
   model what to do instead. Prefer fewer prompts? Let it edit freely and ask only before commands, or never ask.
   **Plan** mode keeps it to reading and proposing.
+- **A shell that remembers.** Like a terminal, a `cd` or an exported variable carries over to the model's next
+  command. It can start a dev server or a watcher in the background, check on its output later and stop it when it's
+  done; you see what's running above the message box and can stop it yourself.
 - **Commands.** Type `/` for a list. `/init` explores the project and writes an `AGENTS.md` that later sessions read
   first; `/clear` starts over in the same folder, `/compact` frees up room, `/help` shows what's available.
 - **Skills.** Ten come built in: exploring a project, implementing a feature, debugging, fixing failing tests,

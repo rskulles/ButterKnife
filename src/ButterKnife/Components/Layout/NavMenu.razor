@@ -7,6 +7,7 @@
 @inject UserEvents UserEvents
 @inject ICodeSessionStore CodeStore
 @inject CodeSessionEvents CodeEvents
+@inject CodeShellRegistry CodeShells
 
 @* The sidebar follows the page colour mode. On phones everything below the brand bar is a collapse; inside it the
    conversation list (the signed-in user's own chats) scrolls and a footer (who is signed in, Settings link,
@@ -348,6 +349,7 @@
     {
         _pendingDelete = null;
         await CodeStore.DeleteAsync(id);
+        CodeShells.Remove(id); // stops whatever the session left running in the background
         CodeEvents.NotifyChanged();
         if (Nav.ToBaseRelativePath(Nav.Uri).Equals($"code/{id}", StringComparison.OrdinalIgnoreCase))
         {

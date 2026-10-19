@@ -100,6 +100,9 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
 
     public ChatOptions Options { get; set; } = ChatOptions.Default;
 
+    /// <summary>The session's shell: run_command keeps its working directory and environment, and starts background commands in it.</summary>
+    public CodeShell? Shell { get; set; }
+
     /// <summary>The compaction checkpoint: a summary of the first <see cref="SummaryThrough"/> history messages, sent in their place.</summary>
     public string? Summary { get; set; }
 
@@ -196,7 +199,7 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
 
             for (var i = 0; i < calls.Count; i++)
             {
-                var invocation = CodeTools.Prepare(calls[i], workspace, readOnly);
+                var invocation = CodeTools.Prepare(calls[i], workspace, readOnly, Shell);
                 ToolResult result;
                 if (invocation.Error is not null)
                 {
@@ -214,7 +217,7 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
                         // Every call needs an answer before the model is asked anything again.
                         for (var j = i + 1; j < calls.Count; j++)
                         {
-                            await FinishAsync(CodeTools.Prepare(calls[j], workspace, readOnly), ToolResult.Fail("Not run: the user declined an earlier action."), history, observer);
+                            await FinishAsync(CodeTools.Prepare(calls[j], workspace, readOnly, Shell), ToolResult.Fail("Not run: the user declined an earlier action."), history, observer);
                         }
                         return CodeTurnEnd.Denied;
                     }
@@ -280,7 +283,7 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
     private List<ChatMessage> BuildRequest(List<ChatMessage> history, bool readOnly, int resultBudget)
     {
         var tail = CodeCompactor.RequestTail(history, SummaryThrough);
-        return [new(ChatRole.System, CodePrompt.Compose(workspace, readOnly, Summary)), .. CodeCompactor.ShrinkOldEdits(CodeCompactor.ClipOldResults(tail, resultBudget))];
+        return [new(ChatRole.System, CodePrompt.Compose(workspace, readOnly, Summary, Shell)), .. CodeCompactor.ShrinkOldEdits(CodeCompactor.ClipOldResults(tail, resultBudget))];
     }
 
     /// <summary>Whether a request is expected to pass the threshold: the larger of the character estimate and the last reported count plus what was added since.</summary>
@@ -416,7 +419,7 @@ public static class CodePrompt
 
     public const int MaxInstructionChars = 20_000;
 
-    public static string Compose(CodeWorkspace workspace, bool readOnly, string? summary = null)
+    public static string Compose(CodeWorkspace workspace, bool readOnly, string? summary = null, CodeShell? shell = null)
     {
         var sb = new StringBuilder();
         sb.Append("""
@@ -429,6 +432,9 @@ public static class CodePrompt
               (without the line-number prefix), with enough context to be unique. Use write_file only for new files or
               complete rewrites.
             - After changing code, build or run the tests with run_command when the project has them, and fix what fails.
+            - run_command works like a terminal: cd and exported variables carry over to the next command. Start servers,
+              watchers and other long-running commands with background: true, check them with command_output, and stop
+              them with command_output stop: true when they are no longer needed.
             - Paths are relative to the project folder. Do not try to work outside it.
             - Call tools rather than describing what you would do. When several independent calls are needed, make them together.
             - Keep replies short. When you are done, say briefly what you changed and anything the user should check.
@@ -452,6 +458,14 @@ public static class CodePrompt
         sb.Append("- Git repository: ").Append(workspace.IsGitRepository ? "yes" : "no").Append('\n');
         sb.Append("- Operating system: ").Append(RuntimeInformation.OSDescription).Append('\n');
         sb.Append("- Shell for run_command: ").Append(ShellCommand.ShellName).Append('\n');
+        if (shell is not null && shell.DisplayDirectory != ".")
+        {
+            sb.Append("- run_command's working directory: ").Append(shell.DisplayDirectory).Append(" (file tools still take paths relative to the project folder)\n");
+        }
+        if (shell?.Background is { Count: > 0 } background)
+        {
+            sb.Append("- Background commands: ").Append(string.Join("; ", background.Select(b => $"{b.Id} `{b.Command}` ({b.Status})"))).Append('\n');
+        }
         sb.Append("- Today's date: ").Append(DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)).Append('\n');
 
         if (ProjectInstructions(workspace) is { } instructions)

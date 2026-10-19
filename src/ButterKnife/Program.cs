@@ -19,6 +19,10 @@ builder.Services.AddAccounts(); // user accounts: this computer is the owner, ot
 builder.Services.AddHttpClient(UpdateChecker.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<UpdateChecker>();
 
+// Code tab: one shell per session (working directory, environment, background commands), kept across page reloads and
+// stopped with the session or when the host shuts down and disposes this singleton.
+builder.Services.AddSingleton<CodeShellRegistry>();
+
 var app = builder.Build();
 
 // Settings → General → "Reachable on the local network": decides the host part of the listen addresses. Set here,
