@@ -39,3 +39,59 @@ public sealed record ToolCall(string Id, string Name, string Arguments)
         }
     }
 }
+
+/// <summary>
+/// Pictures returned by tools (read_file on an image). Anthropic takes them inside the tool result; OpenAI-compatible
+/// servers and Ollama accept images only on user messages, so for them the pictures move, on the wire only, into one
+/// user message right after the run of tool results they came from.
+/// </summary>
+public static class ToolImages
+{
+    public const string Caption = "The pictures returned by the tool calls above:";
+
+    /// <summary>The messages with tool-result images moved into a following user message; the same list when there are none.</summary>
+    public static IReadOnlyList<ChatMessage> MoveToUserMessages(IReadOnlyList<ChatMessage> messages)
+    {
+        if (!messages.Any(m => m.Role == ChatRole.Tool && m.HasImages))
+        {
+            return messages;
+        }
+
+        var result = new List<ChatMessage>(messages.Count + 1);
+        var pending = new List<ChatImage>();
+        var sources = new List<string>();
+
+        void Flush()
+        {
+            if (pending.Count == 0)
+            {
+                return;
+            }
+            result.Add(new ChatMessage(ChatRole.User, $"{Caption} {string.Join(", ", sources)}.", pending.ToArray()));
+            pending.Clear();
+            sources.Clear();
+        }
+
+        foreach (var message in messages)
+        {
+            if (message.Role == ChatRole.Tool)
+            {
+                if (message.HasImages)
+                {
+                    pending.AddRange(message.Images);
+                    sources.Add($"{message.ToolName ?? "tool"} ({message.Images.Count} picture{(message.Images.Count == 1 ? "" : "s")})");
+                    result.Add(message with { Images = ChatMessage.NoImages });
+                }
+                else
+                {
+                    result.Add(message);
+                }
+                continue;
+            }
+            Flush();
+            result.Add(message);
+        }
+        Flush();
+        return result;
+    }
+}

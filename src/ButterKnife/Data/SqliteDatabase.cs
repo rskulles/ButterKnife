@@ -268,6 +268,16 @@ public sealed class SqliteDatabase
                 );
 
                 CREATE INDEX IF NOT EXISTS ix_code_messages_session ON code_messages(session_id, id);
+
+                -- Pictures on a Code message: attached to a prompt, or returned by read_file for an image file.
+                CREATE TABLE IF NOT EXISTS code_message_images (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL REFERENCES code_messages(id) ON DELETE CASCADE,
+                    media_type TEXT NOT NULL,
+                    data       BLOB NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_code_message_images_message ON code_message_images(message_id);
                 """, cancellationToken);
 
             // Databases created before these columns existed.

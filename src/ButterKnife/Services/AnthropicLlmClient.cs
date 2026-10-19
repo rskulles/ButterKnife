@@ -154,7 +154,7 @@ public sealed class AnthropicLlmClient : ILlmClient
             if (m.Role == ChatRole.Tool)
             {
                 pendingResults ??= [];
-                pendingResults.Add(new ToolResultBlockParam { ToolUseID = m.ToolCallId ?? "", Content = m.Content, IsError = m.IsError ? true : null });
+                pendingResults.Add(new ToolResultBlockParam { ToolUseID = m.ToolCallId ?? "", Content = ToolResultContent(m), IsError = m.IsError ? true : null });
                 continue;
             }
 
@@ -176,6 +176,21 @@ public sealed class AnthropicLlmClient : ILlmClient
             result.Add(new MessageParam { Role = Role.User, Content = pendingResults });
         }
         return result;
+    }
+
+    /// <summary>Text alone, or with pictures (read_file on an image) as image blocks after it: tool results may carry images here.</summary>
+    private static ToolResultBlockParamContent ToolResultContent(ChatMessage message)
+    {
+        if (!message.HasImages)
+        {
+            return message.Content;
+        }
+        var blocks = new List<Block> { new TextBlockParam { Text = message.Content } };
+        foreach (var image in message.Images)
+        {
+            blocks.Add(new ImageBlockParam { Source = new Base64ImageSource { MediaType = image.MediaType, Data = image.Base64 } });
+        }
+        return blocks;
     }
 
     private static MessageParamContent BuildToolUseContent(ChatMessage message)

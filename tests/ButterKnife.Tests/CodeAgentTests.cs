@@ -95,6 +95,24 @@ public sealed class CodeAgentTests : IDisposable
     }
 
     [Fact]
+    public async Task ATextOnlyModelGetsNotesInsteadOfPictures()
+    {
+        var png = new ChatImage("image/png", [1, 2, 3]);
+        var client = new ScriptedClient([]);
+        var agent = new CodeAgent(client, "m", _workspace) { SupportsImages = false };
+
+        await agent.RunAsync([new(ChatRole.User, "what is this?", [png])], new RecordingObserver(PermissionChoice.Allow), CancellationToken.None);
+
+        var prompt = client.Requests[0][1];
+        Assert.False(prompt.HasImages);
+        Assert.Contains("cannot see images", prompt.Content);
+
+        var seeing = new ScriptedClient([]);
+        await new CodeAgent(seeing, "m", _workspace).RunAsync([new(ChatRole.User, "what is this?", [png])], new RecordingObserver(PermissionChoice.Allow), CancellationToken.None);
+        Assert.Single(seeing.Requests[0][1].Images); // unknown: sent as is
+    }
+
+    [Fact]
     public async Task PlanModeOffersNoEditTools()
     {
         var client = new ScriptedClient([]);

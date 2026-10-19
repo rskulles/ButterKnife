@@ -111,3 +111,20 @@
 .code-background summary::-webkit-details-marker {
     display: none;
 }
+
+/* Pictures: thumbnails in prompts and read_file rows that expand on click; the page outlines while a file is dragged over. */
+.code-image {
+    max-height: 8rem;
+    cursor: zoom-in;
+}
+
+.code-image-expanded {
+    max-height: none;
+    cursor: zoom-out;
+}
+
+.code-frame.drop-target {
+    outline: 2px dashed var(--bs-primary);
+    outline-offset: -4px;
+    border-radius: 0.375rem;
+}

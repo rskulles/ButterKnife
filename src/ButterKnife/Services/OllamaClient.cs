@@ -16,6 +16,7 @@ public sealed class OllamaClient(IHttpClientFactory httpClientFactory, LlmConnec
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         options ??= ChatOptions.Default;
+        messages = ToolImages.MoveToUserMessages(messages); // Ollama reads images on user messages
         // A configured window is also the num_ctx we ask Ollama to run with; otherwise the server default applies.
         // Sampling settings ride in the same "options" object; "think" is top-level (Ollama 0.9+ ignores it for
         // models that cannot think).

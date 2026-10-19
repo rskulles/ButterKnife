@@ -22,6 +22,7 @@ public sealed class OpenAiCompatibleClient(IHttpClientFactory httpClientFactory,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         options ??= ChatOptions.Default;
+        messages = ToolImages.MoveToUserMessages(messages); // tool messages here carry text only
         // temperature and max_tokens are standard. There is no standard thinking switch: chat_template_kwargs
         // enable_thinking is what vLLM and llama.cpp honour for Qwen3-style models, and other servers ignore it.
         // Tool calls go back on the assistant message with their arguments as the JSON text the model wrote, and each

@@ -95,6 +95,31 @@ public sealed class SqliteCodeSessionStore(SqliteDatabase db) : ICodeSessionStor
             }
         }
 
+        var images = new Dictionary<long, List<ChatImage>>();
+        await using (var rows = connection.CreateCommand())
+        {
+            rows.CommandText = """
+                SELECT i.message_id, i.media_type, i.data FROM code_message_images i
+                JOIN code_messages m ON m.id = i.message_id
+                WHERE m.session_id = $id ORDER BY i.id;
+                """;
+            rows.Parameters.AddWithValue("$id", id.ToString("D"));
+            await using var reader = await rows.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var messageId = reader.GetInt64(0);
+                if (!images.TryGetValue(messageId, out var list))
+                {
+                    images[messageId] = list = [];
+                }
+                list.Add(new ChatImage(reader.GetString(1), (byte[])reader["data"]));
+            }
+        }
+        if (images.Count > 0)
+        {
+            entries = entries.Select(e => images.TryGetValue(e.Id, out var list) ? e with { Message = e.Message with { Images = list } } : e).ToList();
+        }
+
         return session with { Entries = entries };
     }
 
@@ -163,6 +188,17 @@ public sealed class SqliteCodeSessionStore(SqliteDatabase db) : ICodeSessionStor
             insert.Parameters.AddWithValue("$stats", message.Stats is null ? DBNull.Value : JsonSerializer.Serialize(message.Stats, Json));
             insert.Parameters.AddWithValue("$now", now);
             id = (long)(await insert.ExecuteScalarAsync(cancellationToken))!;
+        }
+
+        foreach (var image in message.Images)
+        {
+            await using var picture = connection.CreateCommand();
+            picture.Transaction = (SqliteTransaction)tx;
+            picture.CommandText = "INSERT INTO code_message_images (message_id, media_type, data) VALUES ($message, $type, $data);";
+            picture.Parameters.AddWithValue("$message", id);
+            picture.Parameters.AddWithValue("$type", image.MediaType);
+            picture.Parameters.AddWithValue("$data", image.Data);
+            await picture.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await using (var touch = connection.CreateCommand())

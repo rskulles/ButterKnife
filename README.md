@@ -99,6 +99,10 @@ until the job is done.
   until you allow it. Allow one thing, allow everything like it for the rest of the session, or say no and tell the
   model what to do instead. Prefer fewer prompts? Let it edit freely and ask only before commands, or never ask.
   **Plan** mode keeps it to reading and proposing.
+- **Show it what you mean.** Paste, drop or attach screenshots and mockups with your request, and the model can
+  open pictures in the project itself (an icon, a screenshot in the docs) to look at them. This needs a model that
+  can see as well as call tools, such as Qwen2.5-VL, Qwen3-VL or Mistral Small 3.1; with a model that can't see,
+  ButterKnife says so and leaves the pictures out.
 - **A shell that remembers.** Like a terminal, a `cd` or an exported variable carries over to the model's next
   command. It can start a dev server or a watcher in the background, check on its output later and stop it when it's
   done; you see what's running above the message box and can stop it yourself.

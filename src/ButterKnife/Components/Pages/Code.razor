@@ -31,7 +31,7 @@
 }
 else if (_allowed is true)
 {
-<div class="code-frame d-flex flex-column gap-2 flex-grow-1">
+<div class="code-frame d-flex flex-column gap-2 flex-grow-1" @ref="_frameElement">
     <header class="d-flex flex-wrap align-items-center gap-2">
         @* The folder is fixed once the session has started; before that it opens the picker. *@
         <button type="button" class="btn btn-sm btn-outline-secondary d-inline-flex align-items-center gap-1 text-truncate code-folder"
@@ -155,7 +155,19 @@ else if (_allowed is true)
             {
                 case ItemKind.User:
                     <div class="msg msg-user ms-auto mb-3">
-                        <div class="msg-bubble px-3 py-2 rounded-3 bg-primary-subtle prewrap text-break @(item.Expansion is null ? "" : "font-monospace")">@item.Text.ToString()</div>
+                        @if (item.Images.Count > 0)
+                        {
+                            <div class="d-flex flex-wrap justify-content-end gap-2 mb-1">
+                                @foreach (var image in item.Images)
+                                {
+                                    @Thumbnail(image)
+                                }
+                            </div>
+                        }
+                        @if (item.Text.Length > 0)
+                        {
+                            <div class="msg-bubble px-3 py-2 rounded-3 bg-primary-subtle prewrap text-break ms-auto @(item.Expansion is null ? "" : "font-monospace")">@item.Text.ToString()</div>
+                        }
                         @if (item.Expansion is { } expansion)
                         {
                             <details class="small text-end mt-1">
@@ -263,11 +275,36 @@ else if (_allowed is true)
                 }
             </div>
         }
+        <div class="d-flex flex-column gap-1 flex-grow-1">
+        @if (_pendingImages.Count > 0 || _imageError is not null)
+        {
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                @foreach (var image in _pendingImages)
+                {
+                    <div class="position-relative">
+                        <img src="@image.DataUrl" alt="Picture to send" class="d-block rounded border" style="height: 3.5rem" />
+                        <button type="button" class="btn btn-danger btn-sm rounded-circle p-0 lh-1 position-absolute top-0 start-100 translate-middle"
+                                style="width: 1.3rem; height: 1.3rem" title="Remove picture" aria-label="Remove picture"
+                                @onclick="() => _pendingImages.Remove(image)" disabled="@_isRunning"><i class="bi bi-x" aria-hidden="true"></i></button>
+                    </div>
+                }
+                @if (_imageError is not null)
+                {
+                    <span class="small text-warning-emphasis">@_imageError</span>
+                }
+            </div>
+        }
         <label class="visually-hidden" for="code-input">Message</label>
         <textarea id="code-input" class="form-control" rows="2" @ref="_inputElement" @bind="_input" @bind:event="oninput" @bind:after="OnInputChanged"
                   @onkeydown="OnComposerKey" role="combobox" aria-expanded="@(MenuItems is { Count: > 0 })" aria-autocomplete="list"
                   placeholder="@(_workspace is null ? "Choose a folder first" : "Ask for a change, or type / for commands (Enter to send, Shift+Enter for a new line)")"
                   disabled="@(_workspace is null)"></textarea>
+        </div>
+        <label class="btn btn-outline-secondary @(_isRunning || _workspace is null || _supportsImages is false ? "disabled" : "")" title="@AttachTitle">
+            <i class="bi bi-image" aria-hidden="true"></i><span class="visually-hidden">@AttachTitle</span>
+            <InputFile OnChange="OnFilesSelectedAsync" multiple accept="image/png,image/jpeg,image/gif,image/webp" class="d-none"
+                       disabled="@(_isRunning || _workspace is null || _supportsImages is false)" />
+        </label>
         @if (_isRunning)
         {
             <button class="btn btn-danger" @onclick="Stop" title="Stop (Esc)" aria-label="Stop"><i class="bi bi-stop-btn" aria-hidden="true"></i></button>
@@ -305,7 +342,10 @@ else if (_allowed is true)
     private bool? _supportsTools;
     private int? _contextWindow;
     private int? _contextTokens;
-    private readonly Dictionary<string, (bool? Tools, int? Window)> _modelInfo = [];
+    private readonly Dictionary<string, (bool? Tools, int? Window, bool? Images)> _modelInfo = [];
+
+    /// <summary>Whether the selected model can see pictures; false turns attaching off and turns pictures into notes.</summary>
+    private bool? _supportsImages;
 
     /// <summary>The compaction checkpoint (see CodeCompactor): a summary sent in place of the first _summaryThrough messages.</summary>
     private string? _summary;
@@ -336,6 +376,7 @@ else if (_allowed is true)
 
     private ElementReference _messagesElement;
     private ElementReference _inputElement;
+    private ElementReference _frameElement;
     private IJSObjectReference? _js;
     private DotNetObjectReference<Code>? _self;
 
@@ -343,7 +384,7 @@ else if (_allowed is true)
 
     private string SelectedModelName => _selectedKey[(_selectedKey.IndexOf("::", StringComparison.Ordinal) + 2)..];
 
-    private bool CanSend => !_isRunning && _workspace is not null && Selected is not null && _supportsTools is not false && !string.IsNullOrWhiteSpace(_input);
+    private bool CanSend => !_isRunning && _workspace is not null && Selected is not null && _supportsTools is not false && (!string.IsNullOrWhiteSpace(_input) || _pendingImages.Count > 0);
 
     /// <summary>Prompts kept verbatim by a compaction: Llm:CompactKeepRecentTurns counts chat messages, so half as many prompts.</summary>
     private int KeepRecentPrompts => Math.Max(1, LlmOptions.Value.CompactKeepRecentTurns / 2);
@@ -464,6 +505,7 @@ else if (_allowed is true)
             await _js.InvokeVoidAsync("wireInput", _inputElement, _self);
             await _js.InvokeVoidAsync("wireShortcuts", _self);
             await _js.InvokeVoidAsync("wireScroll", _messagesElement);
+            await _js.InvokeVoidAsync("wireImageInput", _frameElement, _inputElement, _self);
             await ScrollAsync(force: true);
         }
 
@@ -575,6 +617,7 @@ else if (_allowed is true)
         if (Selected is not { } model)
         {
             _supportsTools = null;
+            _supportsImages = null;
             return;
         }
         if (!_modelInfo.TryGetValue(model.Key, out var info))
@@ -582,17 +625,19 @@ else if (_allowed is true)
             try
             {
                 var client = await Registry.GetAsync(model.ConnectionId, _disposed.Token);
-                info = (await client.SupportsToolsAsync(model.Model, _disposed.Token), await client.GetContextWindowAsync(model.Model, _disposed.Token));
+                info = (await client.SupportsToolsAsync(model.Model, _disposed.Token), await client.GetContextWindowAsync(model.Model, _disposed.Token),
+                    await client.SupportsImagesAsync(model.Model, _disposed.Token));
                 _modelInfo[model.Key] = info;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                info = (null, null);
+                info = (null, null, null);
             }
         }
         if (Selected?.Key == model.Key)
         {
             _supportsTools = info.Tools;
+            _supportsImages = info.Images;
             _contextWindow = info.Window ?? _contextWindow;
             await InvokeAsync(StateHasChanged);
         }
@@ -743,6 +788,113 @@ else if (_allowed is true)
         </div>
     </div>;
 
+    // ---------------------------------------------------------------- pictures
+    private const int MaxImages = 6;
+    private const long MaxImageBytes = 10 * 1024 * 1024;
+    private const long ResizeAboveBytes = 1_500_000;
+    private const int MaxImageDimension = 1568; // the same bound as the chat page: keeps requests small
+
+    private readonly List<ChatImage> _pendingImages = [];
+    private string? _imageError;
+    private readonly HashSet<ChatImage> _expandedImages = [];
+
+    private string AttachTitle => _supportsImages is false ? $"{Selected?.Model} cannot see pictures" : "Attach pictures (or paste or drop them)";
+
+    private RenderFragment Thumbnail(ChatImage image) => @<img src="@image.DataUrl" alt="Picture"
+        class="rounded border d-block mw-100 code-image @(_expandedImages.Contains(image) ? "code-image-expanded" : "")"
+        title="Click to toggle size" @onclick="() => { if (!_expandedImages.Remove(image)) { _expandedImages.Add(image); } }" />;
+
+    /// <summary>The picker: large or unusual formats are re-encoded in the browser as a bounded JPEG, like the chat page does.</summary>
+    private async Task OnFilesSelectedAsync(InputFileChangeEventArgs e)
+    {
+        _imageError = null;
+        foreach (var file in e.GetMultipleFiles(MaxImages))
+        {
+            if (!file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                _imageError = $"{file.Name} is not a picture. The model reads project files itself; attach only pictures.";
+                continue;
+            }
+            if (_pendingImages.Count >= MaxImages)
+            {
+                _imageError = $"At most {MaxImages} pictures per message.";
+                break;
+            }
+            try
+            {
+                IBrowserFile source = file;
+                var mediaType = file.ContentType;
+                if (file.Size > ResizeAboveBytes || !ChatImage.SupportedMediaTypes.Contains(mediaType))
+                {
+                    source = await file.RequestImageFileAsync("image/jpeg", MaxImageDimension, MaxImageDimension);
+                    mediaType = "image/jpeg";
+                }
+                await using var stream = source.OpenReadStream(MaxImageBytes, _disposed.Token);
+                using var buffer = new MemoryStream();
+                await stream.CopyToAsync(buffer, _disposed.Token);
+                _pendingImages.Add(new ChatImage(mediaType, buffer.ToArray()));
+            }
+            catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _imageError = $"{file.Name}: {ex.Message}";
+            }
+        }
+    }
+
+    /// <summary>A picture pasted into the composer or dropped on the page (Chat.razor.js has already bounded its size).</summary>
+    [JSInvokable]
+    public async Task OnImagePasted(string name, string mediaType, long byteLength)
+    {
+        if (_js is null)
+        {
+            return;
+        }
+        var reference = await _js.InvokeAsync<IJSStreamReference>("takeDroppedImage"); // always dequeue it
+        try
+        {
+            _imageError = null;
+            if (_isRunning || _workspace is null)
+            {
+                return;
+            }
+            if (!mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                _imageError = $"{name} is not a picture. The model reads project files itself; attach only pictures.";
+                return;
+            }
+            if (_supportsImages is false)
+            {
+                _imageError = $"{Selected?.Model} cannot see pictures.";
+                return;
+            }
+            if (_pendingImages.Count >= MaxImages)
+            {
+                _imageError = $"At most {MaxImages} pictures per message.";
+                return;
+            }
+            await using var stream = await reference.OpenReadStreamAsync(MaxImageBytes, _disposed.Token);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, _disposed.Token);
+            _pendingImages.Add(new ChatImage(mediaType, buffer.ToArray()));
+        }
+        catch (OperationCanceledException) when (_disposed.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _imageError = $"{name}: {ex.Message}";
+        }
+        finally
+        {
+            await reference.DisposeAsync();
+            StateHasChanged();
+        }
+    }
+
     // ---------------------------------------------------------------- slash commands
     /// <summary>Built-ins plus the folder's (and the user's) command files; refreshed when the folder is set and on each command.</summary>
     private IReadOnlyList<CodeCommand> _commands = CodeCommands.BuiltIns;
@@ -871,7 +1023,7 @@ else if (_allowed is true)
         {
             if (_sessionId is null)
             {
-                var session = await Store.CreateAsync(_userId, MakeTitle(display ?? prompt), workspace, model.ConnectionId, model.Model, _mode, _disposed.Token);
+                var session = await Store.CreateAsync(_userId, MakeTitle(display ?? (prompt.Length > 0 ? prompt : "Picture")), workspace, model.ConnectionId, model.Model, _mode, _disposed.Token);
                 _sessionId = session.Id;
                 _title = session.Title;
                 _titlePending = true;
@@ -879,10 +1031,12 @@ else if (_allowed is true)
                 Nav.NavigateTo($"code/{session.Id}", replace: true);
             }
 
-            var message = new ChatMessage(ChatRole.User, prompt);
+            var message = new ChatMessage(ChatRole.User, prompt, _pendingImages.ToArray());
+            _pendingImages.Clear();
+            _imageError = null;
             var id = await Store.AppendAsync(_sessionId.Value, message, display: display, cancellationToken: _disposed.Token);
             _history.Add(message with { Id = id });
-            _items.Add(new CodeItem(ItemKind.User) { MessageIndex = _history.Count - 1, Expansion = display is null ? null : prompt }.Append(display ?? prompt));
+            _items.Add(new CodeItem(ItemKind.User) { MessageIndex = _history.Count - 1, Expansion = display is null ? null : prompt, Images = message.Images }.Append(display ?? prompt));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -918,6 +1072,7 @@ else if (_allowed is true)
             };
             _agent.AllowedCommands.UnionWith(_allowedCommands);
             _agent.Shell = AttachShell(Shells.Get(_sessionId!.Value, workspace));
+            _agent.SupportsImages = _supportsImages;
             end = await _agent.RunAsync(_history, this, token);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -1159,6 +1314,7 @@ else if (_allowed is true)
         var item = ToolItem(invocation);
         item.State = item.Denied ? ToolState.Denied : result.IsError ? ToolState.Failed : ToolState.Done;
         item.SetOutput(result.Output);
+        item.Images = result.Images;
         if (result.Diff is not null && item.Diff is null)
         {
             item.Diff = LineDiffResult.FromUnified(result.Diff);
@@ -1305,7 +1461,7 @@ else if (_allowed is true)
         switch (message.Role)
         {
             case ChatRole.User:
-                _items.Add(new CodeItem(ItemKind.User) { MessageIndex = index, Expansion = entry.Display is null ? null : message.Content }.Append(entry.Display ?? message.Content));
+                _items.Add(new CodeItem(ItemKind.User) { MessageIndex = index, Expansion = entry.Display is null ? null : message.Content, Images = message.Images }.Append(entry.Display ?? message.Content));
                 break;
             case ChatRole.Assistant:
                 if (message.Content.Length > 0 || message.Reasoning is { Length: > 0 })
@@ -1325,6 +1481,7 @@ else if (_allowed is true)
                 {
                     tool.State = message.IsError ? (message.Content.StartsWith("The user declined", StringComparison.Ordinal) ? ToolState.Denied : ToolState.Failed) : ToolState.Done;
                     tool.SetOutput(message.Content);
+                    tool.Images = message.Images;
                     if (entry.Diff is not null)
                     {
                         tool.Diff = LineDiffResult.FromUnified(entry.Diff);
@@ -1400,6 +1557,15 @@ else if (_allowed is true)
                     }
                 </summary>
                 <div class="mt-1 ms-4">
+                    @if (item.Images.Count > 0)
+                    {
+                        <div class="d-flex flex-wrap gap-2 mb-1">
+                            @foreach (var image in item.Images)
+                            {
+                                @Thumbnail(image)
+                            }
+                        </div>
+                    }
                     @if (item.Command is { } cmd)
                     {
                         <div class="font-monospace text-body-secondary text-break mb-1">$ @cmd</div>
@@ -1551,6 +1717,9 @@ else if (_allowed is true)
         public ToolState State { get; set; }
         public bool Denied { get; set; }
         public string Feedback { get; set; } = "";
+
+        /// <summary>Pictures attached to a prompt, or returned by read_file for a tool row.</summary>
+        public IReadOnlyList<ChatImage> Images { get; set; } = ChatMessage.NoImages;
         public TaskCompletionSource<PermissionDecision>? Pending { get; set; }
 
         public CodeItem Append(string text)

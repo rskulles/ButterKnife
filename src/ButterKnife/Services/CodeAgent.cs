@@ -100,6 +100,12 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
 
     public ChatOptions Options { get; set; } = ChatOptions.Default;
 
+    /// <summary>
+    /// Whether the model can see pictures (ILlmClient.SupportsImagesAsync). False replaces every image in the request,
+    /// attached or returned by read_file, with a short note; null (unknown) sends them and lets the server decide.
+    /// </summary>
+    public bool? SupportsImages { get; set; }
+
     /// <summary>The session's shell: run_command keeps its working directory and environment, and starts background commands in it.</summary>
     public CodeShell? Shell { get; set; }
 
@@ -283,7 +289,12 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
     private List<ChatMessage> BuildRequest(List<ChatMessage> history, bool readOnly, int resultBudget)
     {
         var tail = CodeCompactor.RequestTail(history, SummaryThrough);
-        return [new(ChatRole.System, CodePrompt.Compose(workspace, readOnly, Summary, Shell)), .. CodeCompactor.ShrinkOldEdits(CodeCompactor.ClipOldResults(tail, resultBudget))];
+        var messages = CodeCompactor.ShrinkOldEdits(CodeCompactor.ClipOldResults(tail, resultBudget));
+        if (SupportsImages == false)
+        {
+            messages = messages.Select(m => m.WithImagesAsText()).ToList();
+        }
+        return [new(ChatRole.System, CodePrompt.Compose(workspace, readOnly, Summary, Shell)), .. messages];
     }
 
     /// <summary>Whether a request is expected to pass the threshold: the larger of the character estimate and the last reported count plus what was added since.</summary>
@@ -366,7 +377,7 @@ public sealed class CodeAgent(ILlmClient client, string model, CodeWorkspace wor
     }
 
     public static ChatMessage ResultMessage(ToolCall call, ToolResult result) =>
-        new(ChatRole.Tool, result.Output) { ToolCallId = call.Id, ToolName = call.Name, IsError = result.IsError };
+        new(ChatRole.Tool, result.Output, result.Images) { ToolCallId = call.Id, ToolName = call.Name, IsError = result.IsError };
 
     /// <summary>
     /// Makes a stored history safe to send: every tool call gets an answer (a turn that was stopped mid-way leaves calls

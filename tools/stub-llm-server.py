@@ -13,9 +13,12 @@ Speaks enough of each protocol for the app to list models, stream a canned markd
 When a chat request offers tools (the Code tab), the reply walks through a fixed scenario instead, one tool call per
 request in each protocol's own streaming shape: list_files, read_file README.md, write_file stub-notes.md, edit_file
 on it, run_command "ls -la", then a closing summary. A prompt containing "[quick]" skips straight to the summary;
-one containing "[skill]" starts with read_skill explore-project; one containing "[bg]" instead starts a background
+one containing "[skill]" starts with read_skill explore-project; one containing "[look]" reads screenshot.png (an image, so the
+picture comes back to the model); one containing "[bg]" instead starts a background
 command, reads its output with command_output, then cds into src and runs pwd twice to show the directory sticking.
-fake-llama:8b and fake-gpt report tool support; fake-tiny:1b does not.
+fake-llama:8b, fake-gpt and fake-gpt-vision report tool support; fake-tiny:1b does not. fake-llama:8b and
+fake-gpt-vision can see images; the request log shows (role, image count) per message, so a picture from a tool shows
+up on the user message that follows the tool results for Ollama and OpenAI-compatible requests.
 
 Run it, then add connections in the app pointing at http://127.0.0.1:<port> (Ollama / whisper.cpp)
 or http://127.0.0.1:<port>/v1 (OpenAI-compatible / Anthropic). Each request is logged with the roles
@@ -84,8 +87,13 @@ TOOL_SUMMARY = "Done. I listed the folder, read `README.md`, wrote and edited `s
 def tool_progress(body):
     """The latest real prompt and the tool names already called after it, in any of the three protocols."""
     msgs = body.get("messages", [])
+    def text_of(c):
+        return c if isinstance(c, str) else " ".join(b.get("text", "") for b in (c or []) if isinstance(b, dict))
     def is_prompt(m):
         c = m.get("content")
+        # The Code tab moves pictures returned by tools into a user message after the results; that is not a prompt.
+        if text_of(c).startswith("The pictures returned by the tool calls above"):
+            return False
         return m.get("role") == "user" and (isinstance(c, str) or not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in (c or [])))
     start = max((i for i, m in enumerate(msgs) if is_prompt(m)), default=-1)
     prompt = msgs[start].get("content") if start >= 0 else ""
@@ -122,7 +130,7 @@ class H(BaseHTTPRequestHandler):
             self._json({"models": [{"name": "fake-llama:8b", "model": "fake-llama:8b", "context_length": 8192}]})
         elif self.path.startswith("/api/v0/models/"):
             mid = self.path.rsplit("/", 1)[-1]
-            self._json({"id": mid, "type": "vlm" if mid == "fake-gpt-vision" else "llm", "max_context_length": 4096, "capabilities": ["tool_use"] if mid == "fake-gpt" else []})
+            self._json({"id": mid, "type": "vlm" if mid == "fake-gpt-vision" else "llm", "max_context_length": 4096, "capabilities": ["tool_use"] if mid in ("fake-gpt", "fake-gpt-vision") else []})
         elif self.path == "/api/tags":
             self._json({"models": [{"name": "fake-llama:8b"}, {"name": "fake-tiny:1b"}]})
         elif self.path.startswith("/v1/models"):
@@ -247,6 +255,8 @@ class H(BaseHTTPRequestHandler):
     def tool_reply(self, body):
         prompt, called = tool_progress(body)
         steps = ([("This matches a skill; let me read it.", "read_skill", {"name": "explore-project"})] if "[skill]" in prompt else []) + TOOL_STEPS
+        if "[look]" in prompt:
+            steps = [("Let me look at the screenshot.", "read_file", {"path": "screenshot.png"})]
         if "[bg]" in prompt:
             steps = [
                 ("Let me start the server in the background.", "run_command", {"command": "for i in 1 2 3 4 5 6; do echo \"tick $i\"; sleep 1; done; echo finished", "background": True}),

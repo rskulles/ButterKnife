@@ -192,16 +192,17 @@ public static class CodeCompactor
         for (var i = result.Count - 1; i >= 0; i--)
         {
             var message = result[i];
-            if (message.Role != ChatRole.Tool || message.Content.Length <= ClipMinChars)
+            if (message.Role != ChatRole.Tool || (message.Content.Length <= ClipMinChars && !message.HasImages))
             {
                 continue;
             }
-            used += message.Content.Length;
+            // A picture costs about TokensPerImage, counted in characters like the text.
+            used += message.Content.Length + message.Images.Count * ImageChars;
             if (i > lastStep || used <= budgetChars)
             {
                 continue;
             }
-            result[i] = message with { Content = ClearedNote(message) };
+            result[i] = message with { Content = ClearedNote(message), Images = ChatMessage.NoImages };
         }
         return result;
     }
@@ -293,8 +294,15 @@ public static class CodeCompactor
         return -1;
     }
 
+    /// <summary>What one image counts for against the result budget: its token allowance in characters.</summary>
+    private const int ImageChars = (int)(TokenEstimator.TokensPerImage * TokenEstimator.CharsPerToken);
+
     public static string ClearedNote(ChatMessage result)
     {
+        if (result.HasImages)
+        {
+            return $"[This {result.ToolName ?? "tool"} result (a picture) was cleared from the context to save space. Call the tool again if you still need to see it.]";
+        }
         var lines = result.Content.Count(c => c == '\n') + 1;
         return $"[This {result.ToolName ?? "tool"} result ({lines} line{(lines == 1 ? "" : "s")}) was cleared from the context to save space. Call the tool again if you still need it.]";
     }
@@ -341,7 +349,7 @@ public static class CodeCompactor
             switch (message.Role)
             {
                 case ChatRole.User:
-                    sb.Append("User: ").Append(message.Content.Trim()).Append("\n\n");
+                    sb.Append("User: ").Append(message.Content.Trim()).Append(message.HasImages ? $" [{message.Images.Count} image(s) attached]" : "").Append("\n\n");
                     break;
                 case ChatRole.Assistant:
                     if (message.Content.Trim() is { Length: > 0 } text)
@@ -356,7 +364,8 @@ public static class CodeCompactor
                     break;
                 case ChatRole.Tool:
                     sb.Append("Result of ").Append(message.ToolName ?? "tool").Append(message.IsError ? " (error)" : "").Append(':');
-                    sb.Append(excerptChars == 0 ? $" [{message.Content.Length} characters]" : "\n" + HeadAndTail(message.Content.Trim(), excerptChars)).Append("\n\n");
+                    sb.Append(excerptChars == 0 ? $" [{message.Content.Length} characters]" : "\n" + HeadAndTail(message.Content.Trim(), excerptChars));
+                    sb.Append(message.HasImages ? $" [{message.Images.Count} image(s)]" : "").Append("\n\n");
                     break;
             }
         }

@@ -21,6 +21,9 @@ public enum ToolPermission
 public sealed record ToolResult(string Output, bool IsError, string? Diff = null)
 {
     public static ToolResult Fail(string message) => new(message, true);
+
+    /// <summary>Pictures the model should see with the result (read_file on an image). Each client sends them its own way.</summary>
+    public IReadOnlyList<ChatImage> Images { get; init; } = ChatMessage.NoImages;
 }
 
 /// <summary>
@@ -94,6 +97,18 @@ public static class CodeTools
     public const int DefaultReadLines = 1000;
     public const int MaxLineChars = 2000;
     public const int MaxReadChars = 40_000;
+
+    /// <summary>Image files read_file hands to the model as pictures, by extension, and the largest it sends (larger: refused).</summary>
+    public static readonly IReadOnlyDictionary<string, string> ImageTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        [".png"] = "image/png",
+        [".jpg"] = "image/jpeg",
+        [".jpeg"] = "image/jpeg",
+        [".gif"] = "image/gif",
+        [".webp"] = "image/webp",
+    };
+
+    public const long MaxImageFileBytes = 5 * 1024 * 1024;
     public const int MaxListEntries = 400;
     public const int MaxGrepResults = 300;
     public const int DefaultCommandSeconds = 120;
@@ -102,7 +117,7 @@ public static class CodeTools
     private static readonly ToolDefinition[] All =
     [
         ToolDefinition.Create(ReadFile,
-            "Read a text file from the project. Returns numbered lines (number, tab, text). Use offset and limit to page through long files.",
+            "Read a file from the project. Text files come back as numbered lines (number, tab, text); use offset and limit to page through long ones. Images (png, jpg, gif, webp) come back as the picture itself, so you can look at screenshots, mockups and icons.",
             """
             {"type":"object","properties":{
               "path":{"type":"string","description":"File path relative to the project folder"},
@@ -259,6 +274,15 @@ public static class CodeTools
         if (!File.Exists(full))
         {
             return ToolResult.Fail($"{relative} does not exist.");
+        }
+        if (ImageTypes.TryGetValue(System.IO.Path.GetExtension(full), out var mediaType))
+        {
+            var size = new FileInfo(full).Length;
+            if (size > MaxImageFileBytes)
+            {
+                return ToolResult.Fail($"{relative} is an image of {size / 1024.0 / 1024.0:0.#} MB, more than the {MaxImageFileBytes / 1024 / 1024} MB that can be shown. Make a smaller copy first (for example with sips or ImageMagick) and read that.");
+            }
+            return new ToolResult($"{relative}: {mediaType}, {size / 1024.0:0.#} KB. The picture is attached.", false) { Images = [new ChatImage(mediaType, File.ReadAllBytes(full))] };
         }
         if (LooksBinary(full))
         {
